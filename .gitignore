@@ -1,0 +1,22 @@
+# Ignorar la carpeta de Git (aunque Git la ignora por defecto)
+.git/
+
+# Entornos virtuales de Python
+.venv/
+Lib/
+Scripts/
+pyvenv.cfg
+
+# Bases de datos
+*.db
+
+# Archivos temporales de Excel
+~$*
+
+# Logs
+logs/
+*.log
+
+# Carpetas de herramientas específicas
+.zencoder/
+.zenflow/
