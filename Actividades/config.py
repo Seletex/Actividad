@@ -167,53 +167,8 @@ def _dirs_search():
 DIRS_SEARCH = _dirs_search()
 
 CONFIG_FILE = os.path.join(DATA_DIR, "config_actividades.json")
-EXCEL_FILE = buscar_archivo("actividades.xlsx", DIRS_SEARCH)
-
-def _resolve_db_file():
-    import sqlite3
-    def _db_score(p):
-        try:
-            cnt = 0
-            with sqlite3.connect(p) as _c:
-                _cur = _c.cursor()
-                _cur.execute("SELECT COUNT(*) FROM registros")
-                cnt = int(_cur.fetchone()[0])
-        except Exception:
-            cnt = 0
-        try:
-            mtime = os.path.getmtime(p)
-            size = os.path.getsize(p)
-        except Exception:
-            mtime, size = 0, 0
-        return (cnt, mtime, size)
-    candidates = []
-    for d in DIRS_SEARCH:
-        for name in ("actividades.db", "database.db"):
-            p = os.path.join(d, name)
-            if os.path.exists(p):
-                candidates.append((p,) + _db_score(p))
-        sub = os.path.join(d, "dist", "actividades.db")
-        if os.path.exists(sub):
-            candidates.append((sub,) + _db_score(sub))
-    # Siempre considerar el destino por defecto aunque no exista
-    dst = os.path.join(DATA_DIR, "actividades.db")
-    if not candidates:
-        return dst
-    # Elegir el de mayor cantidad de registros; empate â†’ mÃ¡s reciente â†’ mayor tamaÃ±o
-    candidates.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
-    best = candidates[0][0]
-    # Si el mejor no estÃ¡ en DATA_DIR, copiarlo allÃ­
-    try:
-        if os.path.abspath(best) != os.path.abspath(dst):
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(best, dst)
-            return dst
-    except Exception:
-        # Si fallÃ³ la copia, usar el original
-        return best
-    return dst
-
-DB_FILE = _resolve_db_file()
+EXCEL_FILE = os.path.join(DATA_DIR, "actividades.xlsx")
+DB_FILE = os.path.join(DATA_DIR, "actividades.db")
 
 try:
     _legacy_db = os.path.join(DEFAULT_DATA_DIR, "actividades.db")
@@ -267,7 +222,6 @@ def _ensure_data_file(filename):
 
 _ensure_data_file("config_actividades.json")
 _ensure_data_file("usuarios.json")
-_ensure_data_file("actividades.xlsx")
 
 # Plantillas con bÃºsqueda robusta
 TEMPLATE_EXCEL = buscar_archivo("INFORME DE ACTIVIDADES - copia.xlsx", DIRS_SEARCH)

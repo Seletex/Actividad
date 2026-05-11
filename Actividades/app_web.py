@@ -14,7 +14,7 @@ Arquitectura:
   app_web.py         → Este archivo (servidor HTTP)
 """
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 from config import logger
@@ -100,7 +100,7 @@ if __name__ == "__main__":
         print("\nPresiona Ctrl+C para detener el servidor\n")
         print("=" * 60)
         
-        server = HTTPServer(('localhost', PORT), RequestHandler)
+        server = ThreadingHTTPServer(('localhost', PORT), RequestHandler)
         server.serve_forever()
         
     except KeyboardInterrupt:

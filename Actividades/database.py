@@ -59,11 +59,10 @@ def get_db_connection():
     conn = None
     try:
         # Timeout aumentado considerablemente para redes lentas
-        conn = sqlite3.connect(DB_FILE, timeout=30)
+        conn = sqlite3.connect(DB_FILE, timeout=60)
         conn.row_factory = sqlite3.Row
-        # Habilitar Write-Ahead Logging (WAL) mejora concurrencia, 
-        # pero NORMAL es más seguro en red inestable que WAL puro a veces
-        conn.execute("PRAGMA journal_mode=TRUNCATE") # TRUNCATE suele ser más estable en red que WAL si hay desconexiones
+        # WAL mode: mejor concurrencia para múltiples usuarios en servidor
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=FULL")      # Máxima seguridad de datos
     except Exception as e:
         logger.error(f"Error fatal conectando a SQLite: {e}")
@@ -248,11 +247,7 @@ def inicializar_usuarios():
     # 1. Asegurar tablas
     inicializar_tablas()
     
-    # 2. Sincronización automática de registros desde Excel Compartido (Pull)
-    # Solo si el Excel es externo/maestro o estamos en modo red
-    importar_desde_excel()
-    
-    # 3. Limpiar caché inicial
+    # 2. Limpiar caché inicial
     clear_cache()
 
 def inicializar_config():
@@ -613,46 +608,37 @@ def sincronizar_db_a_master():
         logger.error(f"❌ Error sincronizando DB a master: {e}")
     return False
 
-@retry_operation(max_retries=3, base_delay=0.5)
 def sincronizar_excel():
-    """Exporta todos los registros de la BD al archivo Excel para respaldo"""
+    """Exporta todos los registros de la BD al archivo Excel (solo escritura, unidireccional)"""
     try:
         df = cargar_registros()
-        # Eliminar columna ID si existe para que Excel se vea igual que antes
         df_export = df.drop(columns=['ID']) if 'ID' in df.columns else df
-            
-        # Reordenar columnas para que coincidan exactamente con la constante COLUMNAS (menos ID)
         cols_final = [c for c in COLUMNAS if c != 'ID']
         df_export = df_export[cols_final]
         
-        # Intento de escritura resiliente
         intentos = 3
         exito = False
         while intentos > 0:
             try:
-                # engine='openpyxl' es vital para la codificación correcta de tildes en xlsx
                 df_export.to_excel(EXCEL_FILE, index=False, engine='openpyxl')
-                logger.info(f"✅ Sincronización con Excel exitosa: {EXCEL_FILE}")
+                logger.info(f"Excel exportado: {EXCEL_FILE}")
                 exito = True
                 break
             except PermissionError:
                 intentos -= 1
                 if intentos == 0:
-                    logger.warning(f"[WARNING] No se pudo sincronizar Excel {EXCEL_FILE}: El archivo está abierto.")
+                    logger.warning(f"No se pudo exportar Excel {EXCEL_FILE}: archivo abierto.")
                 time.sleep(0.5)
             except Exception as ex:
-                logger.error(f"[ERROR] Error inesperado sincronizando Excel: {ex}")
+                logger.error(f"Error exportando Excel: {ex}")
                 break
         
-        # v7.0: También sincronizar la DB a la red si estamos en modo local fallback
         sincronizar_db_a_master()
-        
         return exito
     except Exception as e:
-        logger.error(f"[ERROR] Error crítico en sincronizar_excel: {e}")
+        logger.error(f"Error en sincronizar_excel: {e}")
         return False
 
-@retry_operation(max_retries=3)
 def importar_desde_excel(file_path=None):
     """Importa y combina registros desde un archivo Excel externo (Maestro)"""
     if not file_path:
@@ -816,13 +802,17 @@ def guardar_registro(data):
                 # SQLite usa lastrowid
                 cursor.execute(query, insert_values)
                 nuevo_id = cursor.lastrowid
-                
-        # Sincronizar con Excel después de guardar (fuera del bloque with para no bloquear la BD)
-        sincronizar_excel()
+        
         return nuevo_id
     except Exception as e:
         logger.error(f"Error guardando registro SQL: {e}")
         return None
+    finally:
+        # Sincronizar con Excel después de guardar (no debe afectar el resultado ni causar reintentos)
+        try:
+            sincronizar_excel()
+        except Exception as e:
+            logger.warning(f"Error sincronizando Excel (no crítico, registro ya guardado en BD): {e}")
 
 @retry_operation(max_retries=3)
 @medir_tiempo
@@ -840,12 +830,15 @@ def eliminar_registro(id_registro, usuario):
 
             cursor.execute(fix_query("DELETE FROM registros WHERE id = ?"), (id_registro,))
 
-        # Sincronizar con Excel después de eliminar
-        sincronizar_excel()
         return True
     except Exception as e:
         logger.error(f"Error eliminando registro SQL: {e}")
         return False
+    finally:
+        try:
+            sincronizar_excel()
+        except Exception:
+            pass
 
 @retry_operation(max_retries=3)
 @medir_tiempo
@@ -896,10 +889,13 @@ def actualizar_registro(id_registro, data, usuario):
 
             cursor.execute(query, values)
             
-        # Sincronizar con Excel después de actualizar
-        sincronizar_excel()
         clear_cache()
         return True
     except Exception as e:
         logger.error(f"Error actualizando registro SQL: {e}")
         return False
+    finally:
+        try:
+            sincronizar_excel()
+        except Exception:
+            pass

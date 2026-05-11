@@ -68,6 +68,9 @@ _SIDEBAR_TEMPLATE = """
                 <a href="/" class="list-group-item list-group-item-action {active_inicio}">
                     <i class="fas fa-home me-2 text-primary"></i> Inicio
                 </a>
+                <a href="/listado" class="list-group-item list-group-item-action {active_listado}">
+                    <i class="fas fa-list me-2 text-primary"></i> Mis Actividades
+                </a>
                 <a href="/gestion" class="list-group-item list-group-item-action {active_gestion}">
                     <i class="fas fa-cog me-2 text-primary"></i> Mi Gestión
                 </a>
@@ -110,7 +113,7 @@ _NAVBAR_TEMPLATE = """
 FORMULARIO_REGISTRO = """
                     <h2 class="mb-4"><i class="fas fa-plus-circle"></i> Nuevo Registro</h2>
                     
-                    <form action="/agregar_registro" method="POST">
+                    <form action="/agregar_registro" method="POST" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
@@ -203,13 +206,15 @@ MAIN_TEMPLATE = """
 
     <div class="container-fluid p-0">
         <div class="row g-0">
-            """ + _SIDEBAR_TEMPLATE.format(active_inicio="active", active_gestion="", active_estadisticas="", active_exportar="") + """
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="active", active_listado="", active_gestion="", active_estadisticas="", active_exportar="") + """
 
             <div class="col-md-10 main-content">
                 <div class="container-fluid">
                     {alertas}
 
                     {seccion_registro}
+                    
+                    {importar_html}
                     
                     <hr class="my-5">
                     
@@ -286,7 +291,7 @@ GESTION_TEMPLATE = """
 
     <div class="container-fluid p-0">
         <div class="row g-0">
-            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_gestion="active", active_estadisticas="", active_exportar="") + """
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_listado="", active_gestion="active", active_estadisticas="", active_exportar="") + """
 
             <div class="col-md-10 main-content">
                 <div class="container-fluid">
@@ -422,7 +427,7 @@ ESTADISTICAS_TEMPLATE = """
 
     <div class="container-fluid p-0">
         <div class="row g-0">
-            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_gestion="", active_estadisticas="active", active_exportar="") + """
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_listado="", active_gestion="", active_estadisticas="active", active_exportar="") + """
 
             <div class="col-md-10 main-content">
                 <div class="row g-4 mb-4">
@@ -593,7 +598,7 @@ EXPORTAR_TEMPLATE = """
 
     <div class="container-fluid p-0">
         <div class="row g-0">
-            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_gestion="", active_estadisticas="", active_exportar="active") + """
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_listado="", active_gestion="", active_estadisticas="", active_exportar="active") + """
 
             <div class="col-md-10 main-content">
                 <h2 class="mb-4"><i class="fas fa-download"></i> Exportar Datos</h2>
@@ -897,6 +902,214 @@ EDIT_REGISTRO_TEMPLATE = _EDIT_REG_BASE.replace(
 ).replace(
     "{navbar}", _NAVBAR_TEMPLATE.replace("{icono}", "edit").replace("{titulo}", "Editar Registro")
 ).replace(
-    "{sidebar}", _SIDEBAR_TEMPLATE.format(active_inicio="active", active_gestion="", active_estadisticas="", active_exportar="")
+    "{sidebar}", _SIDEBAR_TEMPLATE.format(active_inicio="active", active_listado="", active_gestion="", active_estadisticas="", active_exportar="")
 )
 
+
+# =============================================================================
+# PLANTILLA: LISTADO DE ACTIVIDADES
+# =============================================================================
+
+LISTADO_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mis Actividades - Sistema de Actividades</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Select2 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet" />
+    <style>
+        """ + _SHARED_STYLES + """
+        .filter-section {{ background: white; border-radius: 15px; padding: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 25px; }}
+        .badge-status {{ padding: 5px 12px; border-radius: 20px; font-weight: 600; font-size: 0.8rem; }}
+        .bg-cumplido {{ background: #e6fffa; color: #2c7a7b; }}
+        .bg-pendiente {{ background: #fff5f5; color: #c53030; }}
+        .search-input {{ border-radius: 20px; padding-left: 40px; }}
+        .search-icon {{ position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: #a0aec0; }}
+    </style>
+</head>
+<body>
+    """ + _NAVBAR_TEMPLATE.replace("{icono}", "list-ul").replace("{titulo}", "Historial de Actividades") + """
+
+    <div class="container-fluid p-0">
+        <div class="row g-0">
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_listado="active", active_gestion="", active_estadisticas="", active_exportar="") + """
+
+            <div class="col-md-10 main-content">
+                <div class="container-fluid">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h2><i class="fas fa-list-ul text-primary me-2"></i> Todas mis Actividades</h2>
+                        <a href="/" class="btn btn-primary rounded-pill px-4">
+                            <i class="fas fa-plus me-1"></i> Nuevo Registro
+                        </a>
+                    </div>
+
+                    <div class="row g-4 mb-4">
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm rounded-4 bg-primary text-white">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="text-uppercase small mb-1 opacity-75">Total Actividades</h6>
+                                            <h3 class="mb-0 fw-bold" id="totalCount">0</h3>
+                                        </div>
+                                        <i class="fas fa-tasks fa-2x opacity-25"></i>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm rounded-4 bg-success text-white">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="text-uppercase small mb-1 opacity-75">Cumplidas</h6>
+                                            <h3 class="mb-0 fw-bold" id="completedCount">0</h3>
+                                        </div>
+                                        <i class="fas fa-check-circle fa-2x opacity-25"></i>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card border-0 shadow-sm rounded-4 bg-info text-white">
+                                <div class="card-body p-4">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="text-uppercase small mb-1 opacity-75">% Cumplimiento</h6>
+                                            <h3 class="mb-0 fw-bold" id="percentCount">0%</h3>
+                                        </div>
+                                        <i class="fas fa-percentage fa-2x opacity-25"></i>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {importar_html}
+
+                    <div class="filter-section">
+                        <div class="row g-3">
+                            <div class="col-md-12 mb-2">
+                                <div class="position-relative">
+                                    <i class="fas fa-search search-icon"></i>
+                                    <input type="text" id="searchInput" class="form-control search-input" placeholder="Buscar por actividad, ubicación o solicitante...">
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <form action="/listado" method="GET" class="row g-3 align-items-end">
+                                    <div class="col-md-3">
+                                        <label class="form-label small fw-bold text-muted">FECHA INICIO</label>
+                                        <input type="date" name="fecha_inicio" class="form-control" value="{val_fecha_inicio}">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label small fw-bold text-muted">FECHA FIN</label>
+                                        <input type="date" name="fecha_fin" class="form-control" value="{val_fecha_fin}">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label small fw-bold text-muted">ESTADO</label>
+                                        <select name="estado" class="form-select">
+                                            <option value="Todos" {sel_todos}>Todos los estados</option>
+                                            <option value="Sí" {sel_si}>Cumplido</option>
+                                            <option value="No" {sel_no}>No Cumplido</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" class="btn btn-primary w-100">
+                                                <i class="fas fa-filter me-1"></i> Filtrar
+                                            </button>
+                                            <a href="/listado" class="btn btn-outline-secondary w-100">
+                                                <i class="fas fa-sync-alt me-1"></i> Limpiar
+                                            </a>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0" id="tablaActividades">
+                                    <thead class="bg-light">
+                                        <tr class="text-muted small text-uppercase">
+                                            <th class="ps-4">Fecha</th>
+                                            <th>Actividad</th>
+                                            <th>Ubicación</th>
+                                            <th>Solicitante</th>
+                                            <th class="text-center">Estado</th>
+                                            <th class="text-end pe-4">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tableBody">
+                                        {tabla_registros}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-3 text-muted small">
+                        <i class="fas fa-info-circle me-1"></i> <span id="recordInfo">Se muestran todos los registros filtrados.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <script>
+        $(document).ready(function() {{
+            $('.form-select').select2({{
+                theme: 'bootstrap-5',
+                width: '100%'
+            }});
+
+            // Función para actualizar contadores
+            function updateCounters() {{
+                const rows = $('#tableBody tr:visible');
+                const total = rows.length;
+                let completed = 0;
+                
+                rows.each(function() {{
+                    if ($(this).find('.badge-status').text().trim() === 'Sí') {{
+                        completed++;
+                    }}
+                }});
+                
+                $('#totalCount').text(total);
+                $('#completedCount').text(completed);
+                const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+                $('#percentCount').text(percent + '%');
+                
+                if (total === 0) {{
+                    $('#recordInfo').text('No se encontraron registros coincidentes.');
+                }} else {{
+                    $('#recordInfo').text('Mostrando ' + total + ' registros.');
+                }}
+            }}
+
+            // Buscador en tiempo real
+            $("#searchInput").on("keyup", function() {{
+                var value = $(this).val().toLowerCase();
+                $("#tableBody tr").filter(function() {{
+                    $(this).toggle($(this).text().toLowerCase().indexOf(value) > -1)
+                }});
+                updateCounters();
+            }});
+
+            // Inicializar contadores
+            updateCounters();
+        }});
+    </script>
+</body>
+</html>
+"""

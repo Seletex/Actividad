@@ -311,3 +311,54 @@ def generar_tabla_registros_recientes(df, usuario_actual):
         </tr>
         """
     return html
+
+@medir_tiempo
+def generar_tabla_actividades_completa(df, usuario_actual):
+    """Genera el HTML para la tabla completa de registros con acciones y estados visuales"""
+    if df.empty:
+        return '<tr><td colspan="6" class="text-center text-muted py-5">No se encontraron actividades con los filtros seleccionados</td></tr>'
+    
+    # Ordenar por fecha descendente
+    try:
+        df_sorted = df.sort_values(by='FECHA', ascending=False)
+    except:
+        df_sorted = df
+        
+    html = ""
+    for _, row in df_sorted.iterrows():
+        id_reg = row.get('ID', '')
+        es_propietario = (row.get('USUARIO') == usuario_actual) or (usuario_actual == "admin")
+        
+        # Badge de estado
+        cumplido = row.get('CUMPLIDO', 'No')
+        status_class = "bg-cumplido" if cumplido == 'Sí' else "bg-pendiente"
+        badge_html = f'<span class="badge-status {status_class}">{cumplido}</span>'
+        
+        # Acciones
+        acciones = ""
+        if es_propietario:
+            acciones = f"""
+                <div class="d-flex justify-content-end gap-1">
+                    <a href="/editar_registro?id_registro={id_reg}" class="btn btn-sm btn-outline-primary border-0" title="Editar">
+                        <i class="fas fa-edit"></i>
+                    </a>
+                    <form action="/eliminar_registro_accion" method="POST" class="d-inline" onsubmit="return confirm('¿Eliminar este registro?')">
+                        <input type="hidden" name="id_registro" value="{id_reg}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger border-0" title="Eliminar">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </form>
+                </div>
+            """
+        
+        html += f"""
+        <tr>
+            <td class="ps-4 fw-bold">{str(row.get('FECHA', ''))[:10]}</td>
+            <td title="{row.get('TIPO DE ACTIVIDAD', '')}">{str(row.get('TIPO DE ACTIVIDAD', ''))[:50]}</td>
+            <td>{row.get('DEPENDENCIA', '')}</td>
+            <td>{row.get('SOLICITANTE', '')}</td>
+            <td class="text-center">{badge_html}</td>
+            <td class="pe-4">{acciones}</td>
+        </tr>
+        """
+    return html

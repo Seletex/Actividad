@@ -11,7 +11,8 @@ from urllib.parse import parse_qs, unquote
 
 from templates import (
     LOGIN_TEMPLATE, MAIN_TEMPLATE, GESTION_TEMPLATE,
-    EXPORTAR_TEMPLATE, ESTADISTICAS_TEMPLATE, FORMULARIO_REGISTRO
+    EXPORTAR_TEMPLATE, ESTADISTICAS_TEMPLATE, FORMULARIO_REGISTRO,
+    LISTADO_TEMPLATE
 )
 from database import (
     cargar_actividades, cargar_actividades_globales,
@@ -34,7 +35,8 @@ from html_utils import (
     generar_opciones_usuarios, generar_gestion_usuarios,
     generar_gestion_actividades_globales, generar_gestion_actividades_personales,
     generar_gestion_ubicaciones, generar_gestion_tipos_solicitud,
-    generar_gestion_medios_solicitud, generar_tabla_registros_recientes
+    generar_gestion_medios_solicitud, generar_tabla_registros_recientes,
+    generar_tabla_actividades_completa
 )
 
 # =============================================================================
@@ -137,11 +139,40 @@ class IndexHandler(BaseRoute):
                 fecha_hoy=datetime.now().strftime('%Y-%m-%d')
             )
 
+        # Sección de importación (solo admin)
+        if self.usuario_actual == 'admin':
+            importar_html = """
+            <div class="card mb-4 border-warning">
+              <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="fas fa-file-import"></i> 📥 Importar Datos desde Excel</h5>
+              </div>
+              <div class="card-body">
+                <form method="POST" action="/importar_excel">
+                  <div class="row">
+                    <div class="col-md-8">
+                      <label class="form-label">Ruta del archivo .xlsx</label>
+                      <input type="text" class="form-control" name="excel_path" placeholder="C:\\\\ruta\\\\actividades.xlsx" required>
+                      <div class="form-text">Evita duplicados exactos - hace respaldo automático.</div>
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                      <button type="submit" class="btn btn-warning">
+                        <i class="fas fa-upload"></i> Importar
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+            """
+        else:
+            importar_html = ""
+
         html = MAIN_TEMPLATE.format(
             usuario_actual=self.usuario_actual,
             seccion_registro=seccion_registro,
             alertas=alertas,
-            tabla_registros=tabla_html
+            tabla_registros=tabla_html,
+            importar_html=importar_html
         )
         self.render_html(html)
 
@@ -800,6 +831,71 @@ class EditarRegistroHandler(BaseRoute):
             self.redirect(f'/?error=Error al cargar edición: {str(e)}')
 
 
+class ListadoHandler(BaseRoute):
+    """Página con el listado completo y filtrable de actividades"""
+    def get(self, params):
+        if not self._require_auth():
+            return
+            
+        fecha_inicio = params.get('fecha_inicio', [''])[0].strip() or None
+        fecha_fin = params.get('fecha_fin', [''])[0].strip() or None
+        estado = params.get('estado', ['Todos'])[0].strip()
+        
+        # Cargar registros
+        df = cargar_registros(None if self.usuario_actual == 'admin' else self.usuario_actual)
+        
+        # Filtrar por fecha
+        if not df.empty:
+            if fecha_inicio:
+                df = df[df['FECHA ATENCIÓN'] >= fecha_inicio]
+            if fecha_fin:
+                df = df[df['FECHA ATENCIÓN'] <= fecha_fin]
+            if estado != 'Todos':
+                df = df[df['CUMPLIDO'] == estado]
+        
+        tabla_html = generar_tabla_actividades_completa(df, self.usuario_actual)
+        
+        # Sección de importación (solo admin)
+        if self.usuario_actual == 'admin':
+            importar_html = """
+            <div class="card mb-4 border-warning">
+              <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="fas fa-file-import"></i> 📥 Importar Datos desde Excel</h5>
+              </div>
+              <div class="card-body">
+                <form method="POST" action="/importar_excel">
+                  <div class="row">
+                    <div class="col-md-8">
+                      <label class="form-label">Ruta del archivo .xlsx</label>
+                      <input type="text" class="form-control" name="excel_path" placeholder="C:\\\\ruta\\\\actividades.xlsx" required>
+                      <div class="form-text">Evita duplicados exactos - hace respaldo automático.</div>
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                      <button type="submit" class="btn btn-warning">
+                        <i class="fas fa-upload"></i> Importar
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+            """
+        else:
+            importar_html = ""
+        
+        html = LISTADO_TEMPLATE.format(
+            usuario_actual=self.usuario_actual,
+            tabla_registros=tabla_html,
+            val_fecha_inicio=fecha_inicio or "",
+            val_fecha_fin=fecha_fin or "",
+            sel_todos='selected' if estado == 'Todos' else '',
+            sel_si='selected' if estado == 'Sí' else '',
+            sel_no='selected' if estado == 'No' else '',
+            importar_html=importar_html
+        )
+        self.render_html(html)
+
+
 class ActualizarRegistroAccionHandler(BaseRoute):
     """Procesa la actualización de un registro"""
     def post(self, params, post_data):
@@ -871,6 +967,7 @@ class StaticHandler(BaseRoute):
 
 ROUTE_MAP = {
     '/': IndexHandler,
+    '/listado': ListadoHandler,
     '/login': LoginHandler,
     '/logout': LogoutHandler,
     '/gestion': GestionHandler,
