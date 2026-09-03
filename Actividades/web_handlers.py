@@ -21,7 +21,8 @@ from database import (
     cargar_medios_solicitud, guardar_medios_solicitud,
     cargar_usuarios, guardar_usuarios,
     guardar_actividades, guardar_registro,
-    eliminar_registro, EXCEL_FILE, cargar_registros
+    eliminar_registro, EXCEL_FILE, cargar_registros,
+    establecer_contrasena, marcar_debe_cambiar_contrasena
 )
 from activity_service import agregar_actividad_personal, eliminar_actividad_personal
 from export_service import (
@@ -647,6 +648,21 @@ class UserAdminHandler(BaseRoute):
                     guardar_usuarios(u_data)
                     self.redirect('/gestion?msg=Usuario eliminado')
                     return
+
+        elif path == '/asignar_contrasena':
+            target = data.get('usuario', [''])[0].strip()
+            nueva = data.get('nueva_contrasena', [''])[0].strip()
+            forzar = data.get('forzar_cambio', [''])[0].strip() == '1'
+            u_data = cargar_usuarios()
+            if target in u_data.get("usuarios", []):
+                ok, _ = establecer_contrasena(target, nueva, limpiar_debe_cambiar=not forzar)
+                if ok:
+                    if forzar:
+                        marcar_debe_cambiar_contrasena(target, True)
+                    self.redirect(f'/gestion?msg=Contraseña actualizada para {target}')
+                    return
+            self.redirect('/gestion?error=No se pudo asignar la contraseña')
+            return
         
         self.redirect('/gestion')
 
@@ -996,6 +1012,7 @@ ROUTE_MAP = {
     '/actualizar_registro_accion': ActualizarRegistroAccionHandler,
     '/agregar_usuario': UserAdminHandler,
     '/eliminar_usuario': UserAdminHandler,
+    '/asignar_contrasena': UserAdminHandler,
     '/agregar_actividad_global': ConfigAdminHandler,
     '/eliminar_actividad_global': ConfigAdminHandler,
     '/agregar_actividad_personal': ConfigAdminHandler,

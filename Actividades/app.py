@@ -27,6 +27,7 @@ from database import (
     cargar_registros, guardar_registro, eliminar_registro,
     obtener_configuracion_usuario, guardar_configuracion_usuario,
     verificar_credenciales, establecer_contrasena, usuario_tiene_contrasena,
+    usuario_debe_cambiar_contrasena, marcar_debe_cambiar_contrasena,
     registrar_auditoria, obtener_bitacora, limpiar_bitacora
 )
 from web_security import (
@@ -51,7 +52,7 @@ from html_utils import (
 from templates import (
     LOGIN_TEMPLATE, MAIN_TEMPLATE, GESTION_TEMPLATE,
     EXPORTAR_TEMPLATE, ESTADISTICAS_TEMPLATE, FORMULARIO_REGISTRO,
-    ACCESO_GRANTED_TEMPLATE
+    ACCESO_GRANTED_TEMPLATE, CAMBIAR_CONTRASENA_TEMPLATE
 )
 
 app = Flask(__name__)
@@ -109,11 +110,22 @@ def admin_required(f):
     return wrapper
 
 
+def cambio_requerido(f):
+    """Bloquea las rutas hasta que el usuario cambie su contraseña (primer acceso)."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if session.get('debe_cambiar'):
+            return redirect(url_for('cambiar_contrasena_pagina'))
+        return f(*args, **kwargs)
+    return wrapper
+
+
 # =============================================================================
 # AUTENTICACIÓN
 # =============================================================================
 
 @app.route('/', methods=['GET'])
+@cambio_requerido
 def index():
     usuario_actual = session.get('usuario')
 
@@ -221,14 +233,14 @@ def login():
     if not usuario:
         return redirect(url_for('index', error='Ingrese su usuario'))
 
-    ok, motivo = verificar_credenciales(usuario, contrasena)
+    ok, info = verificar_credenciales(usuario, contrasena)
     if not ok:
         registrar_intento_fallido(ip)
-        registrar_auditoria(usuario, "LOGIN_FALLIDO", f"Motivo: {motivo}", ip)
-        if motivo == 'usuario_inexistente':
+        registrar_auditoria(usuario, "LOGIN_FALLIDO", f"Motivo: {info}", ip)
+        if info == 'usuario_inexistente':
             msg = 'Usuario no encontrado'
-        elif motivo == 'sin_contrasena':
-            msg = 'Su cuenta aún no tiene contraseña. Solicítela al administrador o configúrela.'
+        elif info == 'sin_contrasena':
+            msg = 'Su cuenta aún no tiene contraseña. Solicítela al administrador.'
         else:
             msg = 'Contraseña incorrecta'
         return redirect(url_for('index', error=msg))
@@ -240,6 +252,11 @@ def login():
     generar_csrf_token()
     registrar_intento_exitoso(ip)
     registrar_auditoria(usuario, "LOGIN", "Inicio de sesión", ip)
+
+    # Forzar cambio de contraseña si está marcado
+    if info.get('debe_cambiar'):
+        session['debe_cambiar'] = True
+        return redirect(url_for('cambiar_contrasena_pagina', aviso=1))
     return redirect(url_for('index'))
 
 
@@ -257,29 +274,89 @@ def logout():
 # SEGURIDAD DE CUENTA
 # =============================================================================
 
-@app.route('/cambiar_contrasena', methods=['POST'])
+@app.route('/cambiar_contrasena', methods=['GET', 'POST'])
 @login_required
 @csrf_protect
 def cambiar_contrasena():
     usuario = session.get('usuario')
     ip = _ip_cliente()
 
+    # GET: mostrar la página de cambio (usada también en el primer acceso forzado)
+    if request.method == 'GET':
+        forzado = bool(request.args.get('aviso') or session.get('debe_cambiar'))
+        tiene = usuario_tiene_contrasena(usuario)
+        titulo = "Cambiar Contraseña" if tiene else "Configurar Contraseña"
+        campo_actual = ""
+        if tiene and not session.get('debe_cambiar'):
+            campo_actual = """
+            <div class="mb-3">
+                <label class="form-label">Contraseña actual</label>
+                <input type="password" name="contrasena_actual" class="form-control" required autocomplete="current-password">
+            </div>
+            """
+        aviso = ""
+        if session.get('debe_cambiar') or request.args.get('aviso'):
+            aviso = ('<div class="alert alert-warning">⚠️ Por seguridad, debe cambiar su contraseña '
+                     'antes de continuar utilizando la plataforma.</div>')
+        elif request.args.get('error'):
+            aviso = ('<div class="alert alert-danger">❌ ' + html.escape(str(request.args.get('error'))) + '</div>')
+        elif request.args.get('msg'):
+            aviso = ('<div class="alert alert-success">✅ ' + html.escape(str(request.args.get('msg'))) + '</div>')
+
+        page = CAMBIAR_CONTRASENA_TEMPLATE.format(
+            titulo=titulo,
+            usuario_actual=usuario,
+            aviso=aviso,
+            campo_actual=campo_actual,
+            boton=titulo,
+            enlace_salir=url_for('logout')
+        )
+        return _inyectar_csrf(page)
+
+    # POST: procesar el cambio
+    forzado = session.get('debe_cambiar') or request.form.get('forzado') == '1'
+
     nueva = request.form.get('nueva_contrasena', '')
     confirmar = request.form.get('confirmar_contrasena', '')
 
-    if usuario_tiene_contrasena(usuario):
+    # En cambio forzado la contraseña actual ya fue validada en el login.
+    if usuario_tiene_contrasena(usuario) and not forzado:
         actual = request.form.get('contrasena_actual', '')
         if not verificar_credenciales(usuario, actual)[0]:
             registrar_auditoria(usuario, "CAMBIO_CLAVE_RECHAZADO", "Contraseña actual incorrecta", ip)
-            return redirect(url_for('gestion', error='La contraseña actual es incorrecta'))
+            return redirect(url_for('cambiar_contrasena_pagina', error='La contraseña actual es incorrecta'))
 
     if nueva != confirmar:
-        return redirect(url_for('gestion', error='Las contraseñas no coinciden'))
+        return redirect(url_for('cambiar_contrasena_pagina', error='Las contraseñas no coinciden'))
 
-    ok, msg = establecer_contrasena(usuario, nueva)
+    if len(nueva) < 6:
+        return redirect(url_for('cambiar_contrasena_pagina', error='La contraseña debe tener al menos 6 caracteres'))
+
+    ok, msg = establecer_contrasena(usuario, nueva, limpiar_debe_cambiar=True)
     accion = "CONTRASENA_INICIAL" if not usuario_tiene_contrasena(usuario) else "CAMBIO_CONTRASENA"
     registrar_auditoria(usuario, accion, msg, ip)
-    return redirect(url_for('gestion', msg=('Contraseña actualizada correctamente' if ok else 'Error al actualizar')))
+
+    # Limpiar flag de cambio forzado en la sesión
+    session.pop('debe_cambiar', None)
+
+    if not ok:
+        return redirect(url_for('cambiar_contrasena_pagina', error=msg))
+    if forzado:
+        return redirect(url_for('cambiar_contrasena_pagina', msg='✅ Contraseña actualizada. Ya puede continuar. Bienvenido.'))
+    return redirect(url_for('gestion', msg='Contraseña actualizada correctamente'))
+
+
+@app.route('/cambiar_contrasena_pagina')
+@login_required
+def cambiar_contrasena_pagina():
+    if request.args.get('aviso'):
+        session['debe_cambiar'] = True
+    args = {}
+    if request.args.get('error'):
+        args['error'] = request.args.get('error')
+    if request.args.get('msg'):
+        args['msg'] = request.args.get('msg')
+    return redirect(url_for('cambiar_contrasena', **args))
 
 
 # =============================================================================
@@ -288,6 +365,7 @@ def cambiar_contrasena():
 
 @app.route('/gestion')
 @login_required
+@cambio_requerido
 def gestion():
     usuario_actual = session.get('usuario')
     es_admin = usuario_actual == 'admin'
@@ -428,6 +506,37 @@ def eliminar_usuario():
                 registrar_auditoria(session.get('usuario'), "ELIMINAR_USUARIO", f"Usuario eliminado: {usuario}", ip)
                 return redirect(url_for('gestion', msg='Usuario eliminado'))
     return redirect(url_for('gestion', error='Error al eliminar usuario'))
+
+
+@app.route('/asignar_contrasena', methods=['POST'])
+@login_required
+@admin_required
+@csrf_protect
+def asignar_contrasena():
+    ip = _ip_cliente()
+    target = sanitizar(request.form.get('usuario'), 50)
+    nueva = request.form.get('nueva_contrasena', '')
+    forzar = request.form.get('forzar_cambio') == '1'
+
+    data = cargar_usuarios()
+    if target not in data.get("usuarios", []):
+        return redirect(url_for('gestion', error='Usuario no encontrado'))
+
+    if len(nueva) < 6:
+        return redirect(url_for('gestion', error='La contraseña debe tener al menos 6 caracteres'))
+
+    ok, msg = establecer_contrasena(target, nueva, limpiar_debe_cambiar=not forzar)
+    if not ok:
+        return redirect(url_for('gestion', error=msg))
+
+    if forzar:
+        marcar_debe_cambiar_contrasena(target, True)
+        detalle = f"Contraseña asignada a {target} (requiere cambio)"
+    else:
+        detalle = f"Contraseña asignada a {target}"
+
+    registrar_auditoria(session.get('usuario'), "ASIGNAR_CONTRASENA", detalle, ip)
+    return redirect(url_for('gestion', msg=f'Contraseña actualizada para {target}'))
 
 
 @app.route('/guardar_datos_contrato', methods=['POST'])

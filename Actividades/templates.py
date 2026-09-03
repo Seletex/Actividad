@@ -306,6 +306,52 @@ MAIN_TEMPLATE = """
 """
 
 # =============================================================================
+# PLANTILLA: CAMBIO / CONFIGURACIÓN DE CONTRASEÑA
+# =============================================================================
+
+CAMBIAR_CONTRASENA_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cambiar Contraseña - Sistema de Actividades</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
+        .cc-container {{ width: 100%; max-width: 460px; margin: 20px; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="cc-container">
+            <h2 class="text-center mb-1">🔑 {titulo}</h2>
+            <p class="text-center text-muted small mb-4">Usuario: <b>{usuario_actual}</b></p>
+            {aviso}
+            <form action="/cambiar_contrasena" method="POST">
+                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <input type="hidden" name="forzado" value="1">
+                {campo_actual}
+                <div class="mb-3">
+                    <label class="form-label">Nueva contraseña</label>
+                    <input type="password" name="nueva_contrasena" class="form-control" required minlength="6" autocomplete="new-password">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Confirmar contraseña</label>
+                    <input type="password" name="confirmar_contrasena" class="form-control" required minlength="6" autocomplete="new-password">
+                </div>
+                <div class="form-text mb-3">Mínimo 6 caracteres.</div>
+                <button type="submit" class="btn btn-primary w-100"><i class="fas fa-key"></i> {boton}</button>
+            </form>
+            <a href="{enlace_salir}" class="btn btn-link w-100 mt-2">Cerrar sesión</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# =============================================================================
 # PLANTILLA: GESTIÓN
 # =============================================================================
 

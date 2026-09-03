@@ -107,13 +107,14 @@ def inicializar_tablas():
         cursor = get_cursor(conn)
         
         # 1. Crear tabla de usuarios (con columnas de seguridad)
-        cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS usuarios (username TEXT PRIMARY KEY, password_hash TEXT, password_salt TEXT)"))
+        cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS usuarios (username TEXT PRIMARY KEY, password_hash TEXT, password_salt TEXT, debe_cambiar_contrasena INTEGER DEFAULT 0)"))
 
         # Migración: agregar columnas de contraseña a bases SQLite existentes
         if DATABASE_URL:
             try:
                 cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_hash TEXT")
                 cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_salt TEXT")
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS debe_cambiar_contrasena INTEGER DEFAULT 0")
             except Exception:
                 pass
         else:
@@ -123,6 +124,8 @@ def inicializar_tablas():
                     cursor.execute("ALTER TABLE usuarios ADD COLUMN password_hash TEXT")
                 if 'password_salt' not in cols:
                     cursor.execute("ALTER TABLE usuarios ADD COLUMN password_salt TEXT")
+                if 'debe_cambiar_contrasena' not in cols:
+                    cursor.execute("ALTER TABLE usuarios ADD COLUMN debe_cambiar_contrasena INTEGER DEFAULT 0")
             except Exception:
                 pass
 
@@ -309,6 +312,18 @@ def cargar_usuarios():
         # Cargar usuarios
         cursor.execute("SELECT username FROM usuarios")
         usuarios = [row['username'] for row in cursor.fetchall()]
+
+        # Cargar estado de contraseña por usuario
+        estado_claves = {}
+        try:
+            cursor.execute("SELECT username, password_hash, debe_cambiar_contrasena FROM usuarios")
+            for row in cursor.fetchall():
+                estado_claves[row['username']] = {
+                    'tiene_contrasena': bool(row['password_hash']),
+                    'debe_cambiar': bool(row['debe_cambiar_contrasena'])
+                }
+        except Exception:
+            pass
         
         # Cargar actividades personales
         actividades = {}
@@ -336,11 +351,12 @@ def cargar_usuarios():
         return {
             "usuarios": usuarios if usuarios else ["admin"],
             "actividades": actividades,
-            "configuraciones": configuraciones
+            "configuraciones": configuraciones,
+            "estado_claves": estado_claves
         }
     except Exception as e:
         logger.error(f"Error cargando usuarios SQL: {e}")
-        return {"usuarios": ["admin"]}
+        return {"usuarios": ["admin"], "estado_claves": {}}
 
 @medir_tiempo
 def guardar_usuarios(data):
@@ -415,12 +431,13 @@ def _verificar_contrasena(contrasena, hash_guardado, salt):
     return hmac.compare_digest(candidate, hash_guardado)
 
 def verificar_credenciales(usuario, contrasena):
-    """Valida usuario+contraseña. Devuelve (True, username) o (False, motivo).
+    """Valida usuario+contraseña. Devuelve (True, info) o (False, motivo).
+    info es un dict con 'username' y 'debe_cambiar'.
     Usuarios sin contraseña configurada no pueden iniciar sesión en web."""
     try:
         conn = get_db_connection()
         cursor = get_cursor(conn)
-        cursor.execute(fix_query("SELECT username, password_hash, password_salt FROM usuarios WHERE username = ?"), (usuario,))
+        cursor.execute(fix_query("SELECT username, password_hash, password_salt, debe_cambiar_contrasena FROM usuarios WHERE username = ?"), (usuario,))
         row = cursor.fetchone()
         conn.close()
         if not row:
@@ -429,13 +446,20 @@ def verificar_credenciales(usuario, contrasena):
             return False, 'sin_contrasena'
         if not _verificar_contrasena(contrasena, row['password_hash'], row['password_salt']):
             return False, 'clave_incorrecta'
-        return True, row['username']
+        deb_cambiar = False
+        if 'debe_cambiar_contrasena' in row.keys():
+            deb_cambiar = bool(row['debe_cambiar_contrasena'])
+        return True, {
+            'username': row['username'],
+            'debe_cambiar': deb_cambiar
+        }
     except Exception as e:
         logger.error(f"Error verificando credenciales de {usuario}: {e}")
         return False, 'error'
 
-def establecer_contrasena(usuario, contrasena):
+def establecer_contrasena(usuario, contrasena, limpiar_debe_cambiar=True):
     """Establece o cambia la contraseña de un usuario. Valida requisitos mínimos.
+    Por defecto limpia el flag 'debe_cambiar_contrasena'.
     Devuelve (ok, mensaje)."""
     if not contrasena or len(contrasena) < 6:
         return False, "La contraseña debe tener al menos 6 caracteres"
@@ -443,9 +467,10 @@ def establecer_contrasena(usuario, contrasena):
         h, s = _hash_contrasena(contrasena)
         conn = get_db_connection()
         cursor = get_cursor(conn)
+        dcc = 0 if limpiar_debe_cambiar else 1
         cursor.execute(fix_query(
-            "UPDATE usuarios SET password_hash = ?, password_salt = ? WHERE username = ?"
-        ), (h, s, usuario))
+            "UPDATE usuarios SET password_hash = ?, password_salt = ?, debe_cambiar_contrasena = ? WHERE username = ?"
+        ), (h, s, dcc, usuario))
         conn.commit()
         conn.close()
         clear_cache()
@@ -453,6 +478,34 @@ def establecer_contrasena(usuario, contrasena):
     except Exception as e:
         logger.error(f"Error estableciendo contraseña de {usuario}: {e}")
         return False, "Error al actualizar la contraseña"
+
+def marcar_debe_cambiar_contrasena(usuario, debe_cambiar=True):
+    """Marca/desmarca que el usuario debe cambiar su contraseña en el próximo ingreso."""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query(
+            "UPDATE usuarios SET debe_cambiar_contrasena = ? WHERE username = ?"
+        ), (1 if debe_cambiar else 0, usuario))
+        conn.commit()
+        conn.close()
+        clear_cache()
+        return True
+    except Exception as e:
+        logger.error(f"Error marcando cambio de contraseña de {usuario}: {e}")
+        return False
+
+def usuario_debe_cambiar_contrasena(usuario):
+    """Indica si el usuario debe cambiar su contraseña en el próximo ingreso."""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query("SELECT debe_cambiar_contrasena FROM usuarios WHERE username = ?"), (usuario,))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row and row['debe_cambiar_contrasena'])
+    except Exception:
+        return False
 
 def usuario_tiene_contrasena(usuario):
     """Indica si el usuario ya configuró una contraseña"""

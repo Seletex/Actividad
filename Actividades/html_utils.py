@@ -161,8 +161,10 @@ def _generar_gestion_lista_simple(titulo, item_label, items, action_add, action_
 
 @medir_tiempo
 def generar_gestion_usuarios(usuario_actual):
-    """Genera HTML para la gestión de usuarios"""
-    usuarios = cargar_usuarios().get("usuarios", [])
+    """Genera HTML para la gestión de usuarios (admin: asigna contraseñas)"""
+    data_usuarios = cargar_usuarios()
+    usuarios = data_usuarios.get("usuarios", [])
+    estado_claves = data_usuarios.get("estado_claves", {})
     
     if usuario_actual != "admin":
         return """
@@ -190,6 +192,20 @@ def generar_gestion_usuarios(usuario_actual):
     for usuario in usuarios:
         is_admin = usuario == "admin"
         badge = '<span class="badge bg-warning text-dark small">Administrador</span>' if is_admin else '<span class="text-muted small">Usuario Estándar</span>'
+
+        # Estado de contraseña
+        est = estado_claves.get(usuario, {})
+        tiene_clave = est.get('tiene_contrasena', False)
+        debe_cambiar = est.get('debe_cambiar', False)
+        if is_admin:
+            estado_clave_html = '<span class="badge bg-light text-dark small">Clave: —</span>'
+        elif tiene_clave and debe_cambiar:
+            estado_clave_html = '<span class="badge bg-warning text-dark small">🔑 Debe cambiar</span>'
+        elif tiene_clave:
+            estado_clave_html = '<span class="badge bg-success text-white small">🔑 Configurada</span>'
+        else:
+            estado_clave_html = '<span class="badge bg-danger text-white small">Sin contraseña</span>'
+
         delete_btn = "" if is_admin else f'''
             <form action="/eliminar_usuario" method="POST">
                 <input type="hidden" name="usuario" value="{usuario}">
@@ -199,18 +215,38 @@ def generar_gestion_usuarios(usuario_actual):
                 </button>
             </form>
         '''
+
+        # Formulario de asignación de contraseña (para todos, incluido admin)
+        clave_form = f"""
+        <form action="/asignar_contrasena" method="POST" class="d-flex align-items-center gap-1 mt-1">
+            <input type="hidden" name="usuario" value="{usuario}">
+            <input type="password" name="nueva_contrasena" class="form-control form-control-sm" 
+                   style="max-width:150px" placeholder="Nueva clave" minlength="6" required autocomplete="new-password">
+            <label class="small text-muted mb-0 ms-1 text-nowrap">
+                <input type="checkbox" name="forzar_cambio" value="1" class="me-1">Forzar
+            </label>
+            <button type="submit" class="btn btn-sm btn-outline-primary border-0 ms-1" title="Asignar contraseña">
+                <i class="fas fa-key"></i>
+            </button>
+        </form>
+        """
+
         contenido += f"""
-        <div class="list-group-item d-flex justify-content-between align-items-center py-3">
-            <div class="d-flex align-items-center">
-                <div class="rounded-circle bg-light p-2 me-3">
-                    <i class="fas fa-user-circle text-primary"></i>
+        <div class="list-group-item py-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <div class="rounded-circle bg-light p-2 me-3">
+                        <i class="fas fa-user-circle text-primary"></i>
+                    </div>
+                    <div>
+                        <div class="fw-bold text-dark">{usuario}</div>
+                        {badge}
+                        <div class="mt-1">{estado_clave_html}</div>
+                    </div>
                 </div>
-                <div>
-                    <div class="fw-bold text-dark">{usuario}</div>
-                    {badge}
-                </div>
+                {delete_btn}
             </div>
-            {delete_btn}
+            <div class="mt-2">{clave_form}</div>
         </div>
         """
     
