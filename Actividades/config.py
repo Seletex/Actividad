@@ -94,15 +94,41 @@ def _is_writable_dir(path):
 
 MASTER_DIR = None
 
+LOCAL_DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ActividadesData")
+
+def _is_central_available():
+    """Determina si la BD central (carpeta compartida) está accesible y escribible"""
+    central_db = os.path.join(DEFAULT_DATA_DIR, "actividades.db")
+    try:
+        if not os.path.exists(central_db):
+            return False
+        test_path = os.path.join(DEFAULT_DATA_DIR, ".write_test")
+        with open(test_path, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_path)
+        return True
+    except Exception:
+        return False
+
 def _resolve_data_dir():
     """
-    Resuelve el directorio de datos. 
-    Forzamos que use siempre el directorio donde está la aplicación para evitar 
-    desincronizaciones en red.
+    Resuelve el directorio de datos.
+    Prioridad:
+      1. Variable de entorno ACTIVIDADES_DATA_DIR (override explícito, p.ej. carpeta de red)
+      2. BD central: carpeta donde está el exe (carpeta compartida) si está accesible y escribible
+      3. Copia local de respaldo: %LOCALAPPDATA%\ActividadesData
+      4. Directorio del exe o del proyecto
     """
     env_dir = os.environ.get("ACTIVIDADES_DATA_DIR")
     if env_dir and os.path.isdir(env_dir):
         return env_dir
+
+    if _is_central_available():
+        return DEFAULT_DATA_DIR
+
+    if LOCAL_DATA_DIR and os.path.isdir(LOCAL_DATA_DIR) and os.path.exists(os.path.join(LOCAL_DATA_DIR, "actividades.db")):
+        return LOCAL_DATA_DIR
+
     return DEFAULT_DATA_DIR
 
 DATA_DIR = _resolve_data_dir()
@@ -133,6 +159,9 @@ def _copy_if_exists(src_dir, filename):
 
 def _ensure_templates():
     candidates = [BASE_DIR, os.path.dirname(BASE_DIR)]
+    # Cuando es .exe, los archivos empaquetados están en sys._MEIPASS
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        candidates.insert(0, sys._MEIPASS)
     try:
         cwd = os.getcwd()
         candidates.extend([cwd, os.path.dirname(cwd)])
@@ -150,6 +179,9 @@ def _dirs_search():
     tmpl_env = os.environ.get("ACTIVIDADES_TEMPLATES_DIR")
     if tmpl_env and os.path.isdir(tmpl_env):
         dirs.append(tmpl_env)
+    # Cuando es .exe, los archivos empaquetados están en sys._MEIPASS
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        dirs.append(sys._MEIPASS)
     dirs.extend([DATA_DIR, os.path.dirname(DATA_DIR), BASE_DIR])
     try:
         cwd = os.getcwd()
@@ -176,6 +208,24 @@ try:
         shutil.copy2(_legacy_db, DB_FILE)
 except Exception:
     pass
+
+# Si no existe la BD en el DATA_DIR pero viene empaquetada con el exe (sys._MEIPASS),
+# copiarla la primera vez para que la aplicación arranque con los datos incluidos.
+if not os.path.exists(DB_FILE):
+    _seed_candidates = []
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        _seed_candidates.append(os.path.join(sys._MEIPASS, "actividades.db"))
+    if os.path.exists(_legacy_db) and _legacy_db != DB_FILE:
+        _seed_candidates.append(_legacy_db)
+    for _src in _seed_candidates:
+        if os.path.exists(_src):
+            try:
+                os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+                shutil.copy2(_src, DB_FILE)
+                logger.info(f"BD inicial copiada desde: {_src}")
+                break
+            except Exception:
+                pass
 
 def _resolve_usuarios_file():
     candidates = []

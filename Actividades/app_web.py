@@ -14,6 +14,7 @@ Arquitectura:
   app_web.py         → Este archivo (servidor HTTP)
 """
 
+import os
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -90,17 +91,18 @@ if __name__ == "__main__":
         inicializar_config()
         inicializar_excel()
         
-        PORT = 8000
+        PORT = int(os.environ.get("PORT", 8000))
+        HOST = os.environ.get("HOST", "0.0.0.0")
         
         print("=" * 60)
         print("GESTORES DE ACTIVIDADES - VERSION MODULAR")
         print("=" * 60)
-        print(f"\nServidor iniciado en: http://localhost:{PORT}")
-        print("\nAbre tu navegador y ve a: http://localhost:8000")
+        print(f"\nServidor iniciado en: http://{HOST}:{PORT}")
+        print(f"\nAccede desde otro equipo con: http://<IP-DEL-SERVIDOR>:{PORT}")
         print("\nPresiona Ctrl+C para detener el servidor\n")
         print("=" * 60)
         
-        server = ThreadingHTTPServer(('localhost', PORT), RequestHandler)
+        server = ThreadingHTTPServer((HOST, PORT), RequestHandler)
         server.serve_forever()
         
     except KeyboardInterrupt:

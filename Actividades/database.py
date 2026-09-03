@@ -9,11 +9,15 @@ import json
 import sqlite3
 import time
 import random
+import hashlib
+import hmac
+import secrets
+from datetime import datetime
 import pandas as pd
 from config import (
     EXCEL_FILE, USERS_FILE, CONFIG_FILE, DB_FILE, DATABASE_URL, COLUMNAS, 
     ACTIVIDADES_DEFAULT, UBICACIONES_DEFAULT, TIPOS_SOLICITUD_DEFAULT, MEDIOS_SOLICITUD_DEFAULT,
-    logger, DIRS_SEARCH, MASTER_DIR
+    logger, DIRS_SEARCH, MASTER_DIR, LOCAL_DATA_DIR
 )
 from utils import cache_decorator, medir_tiempo, clear_cache
 from contextlib import contextmanager
@@ -102,8 +106,37 @@ def inicializar_tablas():
         conn = get_db_connection()
         cursor = get_cursor(conn)
         
-        # 1. Crear tabla de usuarios
-        cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS usuarios (username TEXT PRIMARY KEY)"))
+        # 1. Crear tabla de usuarios (con columnas de seguridad)
+        cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS usuarios (username TEXT PRIMARY KEY, password_hash TEXT, password_salt TEXT)"))
+
+        # Migración: agregar columnas de contraseña a bases SQLite existentes
+        if DATABASE_URL:
+            try:
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_hash TEXT")
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_salt TEXT")
+            except Exception:
+                pass
+        else:
+            try:
+                cols = [r[1] for r in cursor.execute("PRAGMA table_info(usuarios)")]
+                if 'password_hash' not in cols:
+                    cursor.execute("ALTER TABLE usuarios ADD COLUMN password_hash TEXT")
+                if 'password_salt' not in cols:
+                    cursor.execute("ALTER TABLE usuarios ADD COLUMN password_salt TEXT")
+            except Exception:
+                pass
+
+        # 1b. Tabla de auditoría (bitácora de acciones)
+        cursor.execute(fix_query("""
+            CREATE TABLE IF NOT EXISTS bitacora (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT,
+                accion TEXT,
+                detalle TEXT,
+                ip TEXT,
+                fecha TEXT
+            )
+        """))
         
         # 2. Crear tabla de actividades personales
         cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS actividades_personales (username TEXT, actividad TEXT, UNIQUE(username, actividad))"))
@@ -254,7 +287,12 @@ def inicializar_config():
     pass
 
 def inicializar_excel():
-    pass
+    # Al arrancar, asegurar que la copia local de respaldo tenga los datos actuales
+    try:
+        if os.path.exists(DB_FILE):
+            sincronizar_copia_local()
+    except Exception:
+        pass
 
 # =============================================================================
 # CARGA DE USUARIOS
@@ -351,6 +389,138 @@ def guardar_usuarios(data):
     except Exception as e:
         logger.error(f"Error sincronizando usuarios SQL: {e}")
         return False
+
+# =============================================================================
+# SEGURIDAD: CONTRASEÑAS Y AUDITORÍA
+# =============================================================================
+
+# Iteraciones PBKDF2 (alto para dificultar fuerza bruta)
+_PBKDF2_ITER = 260_000
+
+def _hash_contrasena(contrasena, salt=None):
+    """Genera hash PBKDF2-SHA256 con sal aleatoria y devuelve (hash, salt)"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    dig = hashlib.pbkdf2_hmac(
+        'sha256', contrasena.encode('utf-8'),
+        bytes.fromhex(salt), _PBKDF2_ITER
+    ).hex()
+    return dig, salt
+
+def _verificar_contrasena(contrasena, hash_guardado, salt):
+    """Verifica una contraseña contra hash+salt guardados (a prueba de timing)"""
+    if not hash_guardado or not salt:
+        return False
+    candidate, _ = _hash_contrasena(contrasena, salt)
+    return hmac.compare_digest(candidate, hash_guardado)
+
+def verificar_credenciales(usuario, contrasena):
+    """Valida usuario+contraseña. Devuelve (True, username) o (False, motivo).
+    Usuarios sin contraseña configurada no pueden iniciar sesión en web."""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query("SELECT username, password_hash, password_salt FROM usuarios WHERE username = ?"), (usuario,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return False, 'usuario_inexistente'
+        if not row['password_hash']:
+            return False, 'sin_contrasena'
+        if not _verificar_contrasena(contrasena, row['password_hash'], row['password_salt']):
+            return False, 'clave_incorrecta'
+        return True, row['username']
+    except Exception as e:
+        logger.error(f"Error verificando credenciales de {usuario}: {e}")
+        return False, 'error'
+
+def establecer_contrasena(usuario, contrasena):
+    """Establece o cambia la contraseña de un usuario. Valida requisitos mínimos.
+    Devuelve (ok, mensaje)."""
+    if not contrasena or len(contrasena) < 6:
+        return False, "La contraseña debe tener al menos 6 caracteres"
+    try:
+        h, s = _hash_contrasena(contrasena)
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query(
+            "UPDATE usuarios SET password_hash = ?, password_salt = ? WHERE username = ?"
+        ), (h, s, usuario))
+        conn.commit()
+        conn.close()
+        clear_cache()
+        return True, "Contraseña actualizada correctamente"
+    except Exception as e:
+        logger.error(f"Error estableciendo contraseña de {usuario}: {e}")
+        return False, "Error al actualizar la contraseña"
+
+def usuario_tiene_contrasena(usuario):
+    """Indica si el usuario ya configuró una contraseña"""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query("SELECT password_hash FROM usuarios WHERE username = ?"), (usuario,))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row and row['password_hash'])
+    except Exception:
+        return False
+
+def registrar_auditoria(usuario, accion, detalle="", ip=""):
+    """Registra una acción en la bitácora de auditoría. Nunca lanza (no bloquea)."""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query(
+            "INSERT INTO bitacora (usuario, accion, detalle, ip, fecha) VALUES (?, ?, ?, ?, ?)"
+        ), (usuario, accion, str(detalle)[:1000], ip or "", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Error registrando auditoría: {e}")
+
+def obtener_bitacora(limite=500):
+    """Devuelve los últimos eventos de auditoría, ordenados del más reciente al más antiguo"""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        if DATABASE_URL and psycopg2:
+            cursor.execute("SELECT id, usuario, accion, detalle, ip, fecha FROM bitacora ORDER BY id DESC LIMIT %(limit)s", {"limit": limite})
+            rows = [dict(r) for r in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT id, usuario, accion, detalle, ip, fecha FROM bitacora ORDER BY id DESC LIMIT ?", (limite,))
+            rows = [dict(zip(['id','usuario','accion','detalle','ip','fecha'], r)) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.error(f"Error obteniendo bitácora: {e}")
+        return []
+
+def limpiar_bitacora():
+    """Elimina todos los registros de la bitácora (solo admin)"""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query("DELETE FROM bitacora"))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+def obtener_ultimo_acceso(usuario):
+    """Devuelve la fecha del último acceso registrado de un usuario"""
+    try:
+        conn = get_db_connection()
+        cursor = get_cursor(conn)
+        cursor.execute(fix_query(
+            "SELECT MAX(fecha) as f FROM bitacora WHERE usuario = ? AND accion = 'LOGIN'"
+        ), (usuario,))
+        row = cursor.fetchone()
+        conn.close()
+        return row['f'] if row else None
+    except Exception:
+        return None
 
 @medir_tiempo
 def obtener_configuracion_usuario(usuario):
@@ -608,6 +778,23 @@ def sincronizar_db_a_master():
         logger.error(f"❌ Error sincronizando DB a master: {e}")
     return False
 
+def sincronizar_copia_local():
+    """Copia la BD central (carpeta del exe/compartida) a la copia local de respaldo en AppData.
+    Se usa como respaldo en caso de falla del servidor."""
+    try:
+        import shutil as _sh
+        if not LOCAL_DATA_DIR:
+            return False
+        os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+        dest = os.path.join(LOCAL_DATA_DIR, "actividades.db")
+        if os.path.abspath(DB_FILE) != os.path.abspath(dest) and os.path.exists(DB_FILE):
+            _sh.copy2(DB_FILE, dest)
+            logger.info(f"[OK] Copia local de respaldo actualizada: {dest}")
+            return True
+    except Exception as e:
+        logger.error(f"Error copiando BD a copia local: {e}")
+    return False
+
 def sincronizar_excel():
     """Exporta todos los registros de la BD al archivo Excel (solo escritura, unidireccional)"""
     try:
@@ -634,6 +821,7 @@ def sincronizar_excel():
                 break
         
         sincronizar_db_a_master()
+        sincronizar_copia_local()
         return exito
     except Exception as e:
         logger.error(f"Error en sincronizar_excel: {e}")

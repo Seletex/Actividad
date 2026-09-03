@@ -296,6 +296,21 @@ class EstadisticasHandler(BaseRoute):
             """
         if not tabla_stats:
             tabla_stats = "<tr><td colspan='4' class='text-center text-muted'>No hay datos disponibles</td></tr>"
+        
+        actividad_stats = stats.get('actividades_stats', [])
+        actividad_stats_html = ""
+        for a in actividad_stats:
+            actividad_stats_html += f"""
+            <tr>
+                <td class="small" title="{a['actividad']}">{a['actividad'][:70]}...</td>
+                <td class="text-center"><span class="badge bg-light text-dark">{a['total']}</span></td>
+                <td class="text-center"><span class="badge bg-success text-white">{a['cumplidos']}</span></td>
+                <td class="text-center"><span class="badge bg-secondary">{a['pendientes']}</span></td>
+                <td class="text-center">{a['porcentaje']}</td>
+            </tr>
+            """
+        if not actividad_stats_html:
+            actividad_stats_html = "<tr><td colspan='5' class='text-center text-muted'>No hay datos disponibles</td></tr>"
 
         html = ESTADISTICAS_TEMPLATE.format(
             usuario_actual=self.usuario_actual,
@@ -308,6 +323,7 @@ class EstadisticasHandler(BaseRoute):
             data_cumplimiento=json.dumps(stats.get('chart_cumplimiento', {'labels': [], 'data': []})),
             data_linea=json.dumps(stats.get('chart_linea', {'labels': [], 'data': []})),
             tabla_usuarios_stats=tabla_stats,
+            tabla_actividades_stats=actividad_stats_html,
             val_fecha_inicio=fecha_inicio or "",
             val_fecha_fin=fecha_fin or ""
         )
