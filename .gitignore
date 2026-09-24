@@ -9,6 +9,10 @@ pyvenv.cfg
 
 # Bases de datos
 *.db
+*.db-*
+*.db.backup*
+*.backup*
+*.zip
 
 # Archivos temporales de Excel
 ~$*

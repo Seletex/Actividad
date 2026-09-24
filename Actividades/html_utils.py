@@ -3,10 +3,12 @@ Módulo de utilidades HTML para generar opciones de selects y formularios.
 Solo genera fragmentos HTML, no páginas completas.
 """
 
+import html as _html
 from database import (
     cargar_actividades, cargar_actividades_globales, cargar_ubicaciones, 
-    cargar_tipos_solicitud, cargar_medios_solicitud, cargar_usuarios
-)
+    cargar_tipos_solicitud, cargar_medios_solicitud, cargar_usuarios,
+    usuario_tiene_contrasena, obtener_bitacora
+) 
 from activity_service import obtener_actividades_personales
 from utils import medir_tiempo
 
@@ -159,8 +161,10 @@ def _generar_gestion_lista_simple(titulo, item_label, items, action_add, action_
 
 @medir_tiempo
 def generar_gestion_usuarios(usuario_actual):
-    """Genera HTML para la gestión de usuarios"""
-    usuarios = cargar_usuarios().get("usuarios", [])
+    """Genera HTML para la gestión de usuarios (admin: asigna contraseñas)"""
+    data_usuarios = cargar_usuarios()
+    usuarios = data_usuarios.get("usuarios", [])
+    estado_claves = data_usuarios.get("estado_claves", {})
     
     if usuario_actual != "admin":
         return """
@@ -188,6 +192,20 @@ def generar_gestion_usuarios(usuario_actual):
     for usuario in usuarios:
         is_admin = usuario == "admin"
         badge = '<span class="badge bg-warning text-dark small">Administrador</span>' if is_admin else '<span class="text-muted small">Usuario Estándar</span>'
+
+        # Estado de contraseña
+        est = estado_claves.get(usuario, {})
+        tiene_clave = est.get('tiene_contrasena', False)
+        debe_cambiar = est.get('debe_cambiar', False)
+        if is_admin:
+            estado_clave_html = '<span class="badge bg-light text-dark small">Clave: —</span>'
+        elif tiene_clave and debe_cambiar:
+            estado_clave_html = '<span class="badge bg-warning text-dark small">🔑 Debe cambiar</span>'
+        elif tiene_clave:
+            estado_clave_html = '<span class="badge bg-success text-white small">🔑 Configurada</span>'
+        else:
+            estado_clave_html = '<span class="badge bg-danger text-white small">Sin contraseña</span>'
+
         delete_btn = "" if is_admin else f'''
             <form action="/eliminar_usuario" method="POST">
                 <input type="hidden" name="usuario" value="{usuario}">
@@ -197,18 +215,38 @@ def generar_gestion_usuarios(usuario_actual):
                 </button>
             </form>
         '''
+
+        # Formulario de asignación de contraseña (para todos, incluido admin)
+        clave_form = f"""
+        <form action="/asignar_contrasena" method="POST" class="d-flex align-items-center gap-1 mt-1">
+            <input type="hidden" name="usuario" value="{usuario}">
+            <input type="password" name="nueva_contrasena" class="form-control form-control-sm" 
+                   style="max-width:150px" placeholder="Nueva clave" minlength="6" required autocomplete="new-password">
+            <label class="small text-muted mb-0 ms-1 text-nowrap">
+                <input type="checkbox" name="forzar_cambio" value="1" class="me-1">Forzar
+            </label>
+            <button type="submit" class="btn btn-sm btn-outline-primary border-0 ms-1" title="Asignar contraseña">
+                <i class="fas fa-key"></i>
+            </button>
+        </form>
+        """
+
         contenido += f"""
-        <div class="list-group-item d-flex justify-content-between align-items-center py-3">
-            <div class="d-flex align-items-center">
-                <div class="rounded-circle bg-light p-2 me-3">
-                    <i class="fas fa-user-circle text-primary"></i>
+        <div class="list-group-item py-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <div class="rounded-circle bg-light p-2 me-3">
+                        <i class="fas fa-user-circle text-primary"></i>
+                    </div>
+                    <div>
+                        <div class="fw-bold text-dark">{usuario}</div>
+                        {badge}
+                        <div class="mt-1">{estado_clave_html}</div>
+                    </div>
                 </div>
-                <div>
-                    <div class="fw-bold text-dark">{usuario}</div>
-                    {badge}
-                </div>
+                {delete_btn}
             </div>
-            {delete_btn}
+            <div class="mt-2">{clave_form}</div>
         </div>
         """
     
@@ -343,6 +381,7 @@ def generar_tabla_actividades_completa(df, usuario_actual):
                         <i class="fas fa-edit"></i>
                     </a>
                     <form action="/eliminar_registro_accion" method="POST" class="d-inline" onsubmit="return confirm('¿Eliminar este registro?')">
+                        <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
                         <input type="hidden" name="id_registro" value="{id_reg}">
                         <button type="submit" class="btn btn-sm btn-outline-danger border-0" title="Eliminar">
                             <i class="fas fa-trash-alt"></i>
@@ -354,11 +393,77 @@ def generar_tabla_actividades_completa(df, usuario_actual):
         html += f"""
         <tr>
             <td class="ps-4 fw-bold">{str(row.get('FECHA', ''))[:10]}</td>
-            <td title="{row.get('TIPO DE ACTIVIDAD', '')}">{str(row.get('TIPO DE ACTIVIDAD', ''))[:50]}</td>
-            <td>{row.get('DEPENDENCIA', '')}</td>
-            <td>{row.get('SOLICITANTE', '')}</td>
+            <td title="{_html.escape(str(row.get('TIPO DE ACTIVIDAD', '')))}">{_html.escape(str(row.get('TIPO DE ACTIVIDAD', ''))[:50])}</td>
+            <td>{_html.escape(str(row.get('DEPENDENCIA', '')))}</td>
+            <td>{_html.escape(str(row.get('SOLICITANTE', '')))}</td>
             <td class="text-center">{badge_html}</td>
             <td class="pe-4">{acciones}</td>
         </tr>
         """
-    return html
+    return html
+
+
+def generar_gestion_contrasena(usuario):
+    """Panel de cambio/establecimiento de contraseña (accesible para todos los usuarios)."""
+    tiene = usuario_tiene_contrasena(usuario)
+    if tiene:
+        titulo = "🔑 Cambiar Contraseña"
+        actual_html = """
+            <div class="mb-3">
+                <label class="form-label">Contraseña actual</label>
+                <input type="password" name="contrasena_actual" class="form-control" required autocomplete="current-password">
+            </div>
+        """
+        boton = "Actualizar Contraseña"
+    else:
+        titulo = "🔑 Configurar Contraseña (Primer Acceso)"
+        actual_html = ""
+        boton = "Configurar Contraseña"
+    return f"""
+    <div class="card mb-4">
+      <div class="card-header">
+        <h5 class="mb-0">{titulo}</h5>
+      </div>
+      <div class="card-body">
+        <p class="text-muted small">La contraseña protege su cuenta en la plataforma web.</p>
+        <form method="POST" action="/cambiar_contrasena">
+          <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+          <div class="row">
+            <div class="col-md-4">{actual_html}
+              <div class="mb-3">
+                <label class="form-label">Nueva contraseña</label>
+                <input type="password" name="nueva_contrasena" class="form-control" required minlength="6" autocomplete="new-password">
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="mb-3">
+                <label class="form-label">Confirmar contraseña</label>
+                <input type="password" name="confirmar_contrasena" class="form-control" required minlength="6" autocomplete="new-password">
+              </div>
+            </div>
+            <div class="col-md-4 d-flex align-items-end">
+              <button type="submit" class="btn btn-primary"><i class="fas fa-key"></i> {boton}</button>
+            </div>
+          </div>
+          <div class="form-text">Mínimo 6 caracteres.</div>
+        </form>
+      </div>
+    </div>
+    """
+
+
+def generar_gestion_auditoria():
+    """Acceso rápido al panel de auditoría (solo admin)."""
+    return f"""
+    <div class="card mb-4 border-secondary">
+      <div class="card-header bg-secondary text-white">
+        <h5 class="mb-0"><i class="fas fa-clipboard-list"></i> 📋 Auditoría del Sistema</h5>
+      </div>
+      <div class="card-body">
+        <p class="text-muted small">Consulte el registro de inicios de sesión y acciones administrativas.</p>
+        <a href="/auditoria" class="btn btn-outline-secondary">
+          <i class="fas fa-eye"></i> Ver bitácora de auditoría
+        </a>
+      </div>
+    </div>
+    """

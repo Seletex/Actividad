@@ -16,8 +16,8 @@ LOGIN_TEMPLATE = """
     <title>Login - Sistema de Actividades</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 100vh; }}
-        .login-container {{ max-width: 400px; margin: 100px auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+        body {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
+        .login-container {{ width: 100%; max-width: 400px; margin: 20px; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
     </style>
 </head>
 <body>
@@ -52,7 +52,22 @@ LOGIN_TEMPLATE = """
 _SHARED_STYLES = """
     .navbar-custom {{ background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
     .sidebar {{ background: #f8f9fa; border-right: 1px solid #dee2e6; height: 100vh; position: fixed; width: 250px; z-index: 1000; }}
-    .main-content {{ margin-left: 250px; padding: 30px; background: #f0f2f5; min-height: calc(100vh - 56px); }}
+    .main-content {{ padding: 30px; background: #f0f2f5; min-height: calc(100vh - 56px); transition: all 0.3s; }}
+    
+    @media (min-width: 768px) {{
+        .main-content {{ margin-left: 250px; }}
+    }}
+    
+    @media (max-width: 767px) {{
+        .sidebar {{ display: none !important; }}
+        .main-content {{ margin-left: 0 !important; padding: 15px; }}
+        .navbar-brand {{ font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }}
+        h2 {{ font-size: 1.4rem; }}
+        h3 {{ font-size: 1.2rem; }}
+        .card-header h5 {{ font-size: 1rem; }}
+        .btn-lg {{ padding: 10px 20px; font-size: 1rem; }}
+    }}
+    
     .card {{ border: none; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 25px; transition: transform 0.3s; }}
     .card-header {{ background: white; border-bottom: 1px solid #f0f0f0; border-radius: 15px 15px 0 0 !important; padding: 15px 20px; }}
     .card-header h5 {{ margin: 0; color: #4a5568; font-weight: 700; }}
@@ -91,16 +106,43 @@ _NAVBAR_TEMPLATE = """
             <span class="navbar-brand fw-bold mb-0">
                 <i class="fas fa-{icono} me-2"></i> {titulo}
             </span>
-            <div class="ms-auto d-flex align-items-center">
-                <span class="badge bg-white text-dark py-2 px-3 rounded-pill me-3 shadow-sm">
-                    <i class="fas fa-user-circle me-1 text-primary"></i> {usuario_actual}
-                </span>
-                <a class="btn btn-sm btn-outline-light px-3 rounded-pill me-2" href="/">
-                    <i class="fas fa-home me-1"></i> Inicio
-                </a>
-                <a class="btn btn-sm btn-outline-light px-3 rounded-pill" href="/logout">
-                    <i class="fas fa-sign-out-alt me-1"></i> Salir
-                </a>
+            
+            <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent" aria-controls="navbarContent" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+
+            <div class="collapse navbar-collapse" id="navbarContent">
+                <ul class="navbar-nav d-md-none mt-3 mb-2 border-top border-light pt-3">
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/"><i class="fas fa-home me-2"></i> Inicio</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/listado"><i class="fas fa-list me-2"></i> Mis Actividades</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/gestion"><i class="fas fa-cog me-2"></i> Mi Gestión</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/estadisticas"><i class="fas fa-chart-line me-2"></i> Estadísticas</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/exportar"><i class="fas fa-file-export me-2"></i> Exportar</a>
+                    </li>
+                </ul>
+
+                <div class="ms-auto d-flex flex-column flex-md-row align-items-start align-items-md-center gap-2 mt-3 mt-md-0">
+                    <span class="badge bg-white text-dark py-2 px-3 rounded-pill shadow-sm">
+                        <i class="fas fa-user-circle me-1 text-primary"></i> {usuario_actual}
+                    </span>
+                    <div class="d-flex gap-2">
+                        <a class="btn btn-sm btn-outline-light px-3 rounded-pill" href="/">
+                            <i class="fas fa-home me-1"></i> Inicio
+                        </a>
+                        <a class="btn btn-sm btn-outline-light px-3 rounded-pill" href="/logout">
+                            <i class="fas fa-sign-out-alt me-1"></i> Salir
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
     </nav>
@@ -114,6 +156,7 @@ FORMULARIO_REGISTRO = """
                     <h2 class="mb-4"><i class="fas fa-plus-circle"></i> Nuevo Registro</h2>
                     
                     <form action="/agregar_registro" method="POST" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
+                        <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
@@ -263,6 +306,52 @@ MAIN_TEMPLATE = """
 """
 
 # =============================================================================
+# PLANTILLA: CAMBIO / CONFIGURACIÓN DE CONTRASEÑA
+# =============================================================================
+
+CAMBIAR_CONTRASENA_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cambiar Contraseña - Sistema de Actividades</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
+        .cc-container {{ width: 100%; max-width: 460px; margin: 20px; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="cc-container">
+            <h2 class="text-center mb-1">🔑 {titulo}</h2>
+            <p class="text-center text-muted small mb-4">Usuario: <b>{usuario_actual}</b></p>
+            {aviso}
+            <form action="/cambiar_contrasena" method="POST">
+                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <input type="hidden" name="forzado" value="1">
+                {campo_actual}
+                <div class="mb-3">
+                    <label class="form-label">Nueva contraseña</label>
+                    <input type="password" name="nueva_contrasena" class="form-control" required minlength="6" autocomplete="new-password">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Confirmar contraseña</label>
+                    <input type="password" name="confirmar_contrasena" class="form-control" required minlength="6" autocomplete="new-password">
+                </div>
+                <div class="form-text mb-3">Mínimo 6 caracteres.</div>
+                <button type="submit" class="btn btn-primary w-100"><i class="fas fa-key"></i> {boton}</button>
+            </form>
+            <a href="{enlace_salir}" class="btn btn-link w-100 mt-2">Cerrar sesión</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# =============================================================================
 # PLANTILLA: GESTIÓN
 # =============================================================================
 
@@ -296,6 +385,8 @@ GESTION_TEMPLATE = """
             <div class="col-md-10 main-content">
                 <div class="container-fluid">
                     {alertas}
+
+                    <!-- EXTRA_GESTION -->
 
                     <div class="row">
                         <div class="col-lg-7">
@@ -509,6 +600,30 @@ ESTADISTICAS_TEMPLATE = """
                                         </thead>
                                         <tbody>
                                             {tabla_usuarios_stats}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card border-0 shadow-sm rounded-4 mb-4">
+                            <div class="card-header bg-white py-3">
+                                <h5 class="mb-0"><i class="fas fa-check-circle me-2 text-success"></i> Resumen por Actividad (Cumplimiento)</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-hover mb-0">
+                                        <thead>
+                                            <tr class="text-muted small text-uppercase">
+                                                <th>Actividad</th>
+                                                <th class="text-center">Total</th>
+                                                <th class="text-center">Cumplidas</th>
+                                                <th class="text-center">Pendientes</th>
+                                                <th class="text-center">% Cumplimiento</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {tabla_actividades_stats}
                                         </tbody>
                                     </table>
                                 </div>
@@ -1110,6 +1225,84 @@ LISTADO_TEMPLATE = """
             updateCounters();
         }});
     </script>
+</body>
+</html>
+"""
+
+# =============================================================================
+# PLANTILLA: PANEL DE AUDITORÍA (versión web Flask)
+# =============================================================================
+
+ACCESO_GRANTED_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auditoría - Sistema de Actividades</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        """ + _SHARED_STYLES + """
+        .table-auditoria th {{
+            background: #f8f9fa;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }}
+    </style>
+</head>
+<body>
+    """ + _NAVBAR_TEMPLATE.replace("{icono}", "clipboard-list").replace("{titulo}", "Auditoría del Sistema") + """
+
+    <div class="container-fluid p-0">
+        <div class="row g-0">
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_listado="", active_gestion="", active_estadisticas="", active_exportar="") + """
+
+            <div class="col-md-10 main-content">
+                <div class="container-fluid">
+                    {alertas}
+
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h3 class="mb-0"><i class="fas fa-clipboard-list me-2 text-primary"></i> Bitácora de Auditoría</h3>
+                        <div>
+                            <a href="/" class="btn btn-outline-secondary btn-sm me-2"><i class="fas fa-arrow-left me-1"></i>Volver</a>
+                            <form action="/limpiar_auditoria" method="POST" class="d-inline" onsubmit="return confirm('¿Eliminar TODOS los registros de auditoría?')">
+                                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                                <button type="submit" class="btn btn-outline-danger btn-sm">
+                                    <i class="fas fa-trash me-1"></i>Limpiar bitácora
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle table-auditoria">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Usuario</th>
+                                            <th>Acción</th>
+                                            <th>Detalle</th>
+                                            <th>IP</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {tabla_auditoria}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """

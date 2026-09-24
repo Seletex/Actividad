@@ -148,9 +148,29 @@ def obtener_estadisticas_exportacion(usuario=None, fecha_inicio=None, fecha_fin=
                 user_stats.append({
                     'usuario': user,
                     'total': total_user,
+                    'cumplidos': cumplidos,
+                    'pendientes': total_user - cumplidos,
                     'cumplimiento': porcentaje,
                     'ultima': ultima
                 })
+        
+        # Estadística por tipo de actividad
+        actividad_stats = []
+        if 'TIPO DE ACTIVIDAD' in df.columns:
+            for act, group in df.groupby('TIPO DE ACTIVIDAD'):
+                total_act = len(group)
+                cumplidos_act = len(group[group['CUMPLIDO'] == 'Sí'])
+                pct = f"{(cumplidos_act/total_act)*100:.1f}%" if total_act > 0 else "0%"
+                badge = '<span class="badge bg-success text-white">' if cumplidos_act == total_act else '<span class="badge bg-warning text-dark">'
+                actividad_stats.append({
+                    'actividad': act[:80],
+                    'total': total_act,
+                    'cumplidos': cumplidos_act,
+                    'pendientes': total_act - cumplidos_act,
+                    'porcentaje': pct,
+                    'badge': badge
+                })
+            actividad_stats.sort(key=lambda x: x['total'], reverse=True)
         
         return {
             'fecha_min': df['FECHA_DT'].min().strftime('%Y-%m-%d'),
@@ -161,7 +181,8 @@ def obtener_estadisticas_exportacion(usuario=None, fecha_inicio=None, fecha_fin=
             'chart_actividades': chart_actividades,
             'chart_cumplimiento': chart_cumplimiento,
             'chart_linea': chart_linea,
-            'usuarios': user_stats
+            'usuarios': user_stats,
+            'actividades_stats': actividad_stats
         }
     except Exception as e:
         logger.error(f"Error obteniendo estadísticas: {e}")
