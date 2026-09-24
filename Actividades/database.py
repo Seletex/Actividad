@@ -6,14 +6,18 @@ Implementa la misma interfaz que database.py pero usando SQLite.
 
 import os
 import json
+import uuid
+import hashlib
 import sqlite3
 import time
 import random
+import shutil
 import pandas as pd
+from datetime import datetime
 from config import (
     EXCEL_FILE, USERS_FILE, CONFIG_FILE, DB_FILE, DATABASE_URL, COLUMNAS, 
     ACTIVIDADES_DEFAULT, UBICACIONES_DEFAULT, TIPOS_SOLICITUD_DEFAULT, MEDIOS_SOLICITUD_DEFAULT,
-    logger, DIRS_SEARCH, MASTER_DIR
+    logger, DIRS_SEARCH, MASTER_DIR, DATA_DIR
 )
 from utils import cache_decorator, medir_tiempo, clear_cache
 from contextlib import contextmanager
@@ -120,7 +124,8 @@ def inicializar_tablas():
                 id SERIAL PRIMARY KEY,
                 usuario TEXT, tipo_actividad TEXT, fecha TIMESTAMP, dependencia TEXT,
                 solicitante TEXT, tipo_solicitud TEXT, medio_solicitud TEXT,
-                descripcion TEXT, cumplido TEXT, fecha_atencion TEXT, observaciones TEXT
+                descripcion TEXT, cumplido TEXT, fecha_atencion TEXT, observaciones TEXT,
+                sync_uid TEXT, updated_at TEXT, borrado INTEGER DEFAULT 0
             )
         """
         # Adaptar SERIAL para SQLite
@@ -227,6 +232,13 @@ def inicializar_tablas():
             except Exception as e_excel:
                 logger.error(f"Error migrando Excel: {e_excel}")
 
+        # Migrar columnas de sincronización (registros) para SQLite
+        if not DATABASE_URL:
+            try:
+                _asegurar_columnas_sync(conn)
+            except Exception as e_sync:
+                logger.error(f"Error migrando columnas de sincronización: {e_sync}")
+
         conn.commit()
         conn.close()
         logger.info("Base de datos inicializada correctamente.")
@@ -244,10 +256,16 @@ def inicializar_tablas_postgres():
 @medir_tiempo
 def inicializar_usuarios():
     """Punto de entrada para inicialización desde app_web.py"""
-    # 1. Asegurar tablas
+    # 1. Sincronizar datos más recientes desde la red (si está disponible)
+    try:
+        sincronizar_red_a_local()
+    except Exception as e:
+        logger.warning(f"[INIT] No se pudo sincronizar desde red: {e}")
+    
+    # 2. Asegurar tablas
     inicializar_tablas()
     
-    # 2. Limpiar caché inicial
+    # 3. Limpiar caché inicial
     clear_cache()
 
 def inicializar_config():
@@ -590,26 +608,317 @@ def guardar_medios_solicitud(medios):
 # CRUD DE REGISTROS
 # =============================================================================
 
+# =============================================================================
+# SINCRONIZACIÓN LOCAL <-> RED
+# =============================================================================
+# Sincronización POR REGISTRO y POR USUARIO:
+# - Crea los registros que faltan, actualiza los editados y propaga los
+#   borrados (última escritura gana por updated_at).
+# - Cada registro tiene un sync_uid único y estable entre BDs (los datos
+#   existentes reciben un UID determinístico según su contenido).
+# - Así los datos de un equipo que estuvo sin red se conservan y se unen a la
+#   base central sin perder ni duplicar registros.
+
+_TABLAS_CON_CLAVE_UNICA = [
+    "usuarios",
+    "actividades_personales",
+    "configuracion_usuario",
+    "listas_globales",
+]
+
+_COLUMNAS_REGISTRO = [
+    "usuario", "tipo_actividad", "fecha", "dependencia", "solicitante",
+    "tipo_solicitud", "medio_solicitud", "descripcion", "cumplido",
+    "fecha_atencion", "observaciones",
+]
+
+_SYNC_COLUMNS = _COLUMNAS_REGISTRO + ["sync_uid", "updated_at", "borrado"]
+
+def _ahora():
+    """Timestamp ISO con microsegundos para resolver conflictos de sincronización."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+def _sval(v):
+    """Convierte un valor (incluido NaN/None/Timestamp) a texto seguro."""
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except Exception:
+        pass
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    return str(v)
+
+def _legacy_uid(vals):
+    """UID determinístico basado en el contenido: mismo registro = mismo UID en cualquier BD."""
+    h = hashlib.sha1("|".join(_sval(v).strip() for v in vals).encode("utf-8")).hexdigest()[:16]
+    return "legacy_" + h
+
+def _asegurar_columnas_sync(conn):
+    """Agrega las columnas de sincronización a 'registros' si faltan y rellena las filas existentes."""
+    try:
+        cur = conn.execute("PRAGMA table_info(registros)")
+        cols = {r[1] for r in cur.fetchall()}
+        if "sync_uid" not in cols:
+            conn.execute("ALTER TABLE registros ADD COLUMN sync_uid TEXT")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE registros ADD COLUMN updated_at TEXT")
+        if "borrado" not in cols:
+            conn.execute("ALTER TABLE registros ADD COLUMN borrado INTEGER DEFAULT 0")
+        # Asignar UID a filas legacy a partir de su contenido (determinístico entre BDs)
+        sel = ", ".join(_COLUMNAS_REGISTRO)
+        filas_legacy = conn.execute("SELECT id, %s FROM registros WHERE sync_uid IS NULL OR sync_uid = ''" % sel).fetchall()
+        if filas_legacy:
+            conn.executemany(
+                "UPDATE registros SET sync_uid = ? WHERE id = ?",
+                [(_legacy_uid(f[1:]), f[0]) for f in filas_legacy],
+            )
+        conn.execute("UPDATE registros SET updated_at = COALESCE(updated_at, fecha, datetime('now')) WHERE updated_at IS NULL OR updated_at = ''")
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"[SYNC] No se pudieron asegurar columnas de sincronización: {e}")
+
+def _clave_registro(fila):
+    """Clave natural de un registro (ignora id/sync_uid): sirve para detectar duplicados por contenido."""
+    return tuple(_sval(v).strip().lower() for v in fila)
+
+def _insertar_fila_sync(conn, r):
+    """Inserta una fila completa de registros en la BD destino."""
+    values = tuple(_sval(getattr(r, c)) for c in _COLUMNAS_REGISTRO)
+    conn.execute(
+        "INSERT INTO registros (%s, sync_uid, updated_at, borrado) VALUES (%s)" % (
+            ", ".join(_COLUMNAS_REGISTRO),
+            ", ".join(["?"] * (len(_COLUMNAS_REGISTRO) + 3)),
+        ),
+        values + (_sval(getattr(r, "sync_uid", "")), _sval(getattr(r, "updated_at", "")), _borrado_val(getattr(r, "borrado", 0))),
+    )
+
+def _actualizar_fila_sync(conn, r):
+    """Actualiza la fila en la BD destino con los datos de la fila origen."""
+    set_cols = ", ".join(c + " = ?" for c in _COLUMNAS_REGISTRO)
+    values = tuple(_sval(getattr(r, c)) for c in _COLUMNAS_REGISTRO)
+    conn.execute(
+        "UPDATE registros SET %s, sync_uid = ?, updated_at = ?, borrado = ? WHERE sync_uid = ?" % set_cols,
+        values + (_sval(getattr(r, "sync_uid", "")), _sval(getattr(r, "updated_at", "")), _borrado_val(getattr(r, "borrado", 0)), _sval(getattr(r, "sync_uid", ""))),
+    )
+
+def _borrado_val(v):
+    return 1 if _sval(v) in ("1", "True", "true") else 0
+
+def _merge_registros_una_via(src_df, dst_df, dst_conn):
+    """
+    Propaga a la BD destino los registros de origen que faltan o están más
+    actualizados (por updated_at). Los borrados se propagan como tombstones.
+    """
+    cambios = 0
+    por_uid_src = {}
+    por_uid_dst = {}
+    for r in src_df.itertuples(index=False):
+        uid = _sval(getattr(r, "sync_uid", ""))
+        if uid:
+            por_uid_src[uid] = r
+    for r in dst_df.itertuples(index=False):
+        uid = _sval(getattr(r, "sync_uid", ""))
+        if uid:
+            por_uid_dst[uid] = r
+
+    claves_dst = set(_clave_registro(_sval(getattr(r, c)) for c in _COLUMNAS_REGISTRO) for r in por_uid_dst.values())
+
+    for uid, ro in por_uid_src.items():
+        rd = por_uid_dst.get(uid)
+        if rd is None:
+            # No existe en destino: insertar, salvo que ya haya una fila con el mismo contenido
+            clave_o = _clave_registro(_sval(getattr(ro, c)) for c in _COLUMNAS_REGISTRO)
+            if clave_o in claves_dst:
+                continue
+            _insertar_fila_sync(dst_conn, ro)
+            cambios += 1
+        else:
+            ts_o = _sval(ro.updated_at)
+            ts_d = _sval(rd.updated_at)
+            if ts_o > ts_d:
+                _actualizar_fila_sync(dst_conn, ro)
+                cambios += 1
+    return cambios
+
+def _sincronizar_registros(origen, destino):
+    """
+    Sincroniza la tabla 'registros' entre dos BDs: crea los que faltan,
+    actualiza los editados y propaga los borrados (última escritura gana).
+    """
+    if _mismo_archivo(origen, destino) or not os.path.exists(origen) or not os.path.exists(destino):
+        return 0
+    try:
+        con_o = sqlite3.connect(origen, timeout=60)
+        con_d = sqlite3.connect(destino, timeout=60)
+        _asegurar_columnas_sync(con_o)
+        _asegurar_columnas_sync(con_d)
+        sel = ", ".join(_SYNC_COLUMNS)
+        df_o = pd.read_sql_query("SELECT %s FROM registros" % sel, con_o)
+        df_d = pd.read_sql_query("SELECT %s FROM registros" % sel, con_d)
+        n = _merge_registros_una_via(df_o, df_d, con_d)
+        con_d.commit()
+        con_o.close()
+        con_d.close()
+        if n:
+            logger.info(f"[SYNC] Registros sincronizados: {n} cambio(s) ({os.path.basename(origen)} -> {os.path.basename(destino)})")
+        return n
+    except Exception as e:
+        logger.warning(f"[SYNC] No se pudieron sincronizar registros: {e}")
+        return 0
+
+def _mismo_archivo(a, b):
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except Exception:
+        return False
+
+def _intentar_copiar(origen, destino, descripcion, max_intentos=3):
+    """Copia un archivo con reintentos y logging detallado"""
+    if not os.path.exists(origen):
+        logger.warning(f"[SYNC] No se puede sincronizar '{descripcion}': origen no existe ({origen})")
+        return False
+    # Si origen y destino son el mismo archivo (BD central en red), omitir
+    if _mismo_archivo(origen, destino):
+        logger.info(f"[SYNC] {descripcion}: mismo archivo, se omite copia")
+        return True
+    for intento in range(1, max_intentos + 1):
+        try:
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            shutil.copy2(origen, destino)
+            logger.info(f"[SYNC] {descripcion} sincronizado: {origen} -> {destino}")
+            return True
+        except (PermissionError, OSError) as e:
+            if intento < max_intentos:
+                espera = 0.5 * intento
+                logger.warning(f"[SYNC] Reintento {intento}/{max_intentos} copiando {descripcion}: {e}")
+                time.sleep(espera)
+            else:
+                logger.error(f"[SYNC] Error copiando {descripcion} después de {max_intentos} intentos: {e}")
+        except Exception as e:
+            logger.error(f"[SYNC] Error inesperado copiando {descripcion}: {e}")
+            break
+    return False
+
+def _fusionar_tabla(origen, destino, tabla):
+    """Agrega a 'destino' las filas de 'origen' que no existan (por clave única)."""
+    if _mismo_archivo(origen, destino) or not os.path.exists(origen) or not os.path.exists(destino):
+        return 0
+    try:
+        con = sqlite3.connect(destino, timeout=60)
+        con.execute("ATTACH DATABASE ? AS src", (origen,))
+        cur = con.execute(f"INSERT OR IGNORE INTO {tabla} SELECT * FROM src.{tabla}")
+        con.commit()
+        n = cur.rowcount
+        con.execute("DETACH DATABASE src")
+        con.close()
+        if n:
+            logger.info(f"[SYNC] Fusión {tabla}: {n} fila(s) nuevas ({os.path.basename(origen)} -> {os.path.basename(destino)})")
+        return n or 0
+    except Exception as e:
+        logger.warning(f"[SYNC] No se pudo fusionar tabla '{tabla}': {e}")
+        return 0
+
+def _sincronizar_bidireccional(ruta_local, ruta_red):
+    """Fusiona tablas y registros en ambos sentidos (crea, actualiza y propaga borrados)."""
+    total = 0
+    # Red -> Local
+    for tabla in _TABLAS_CON_CLAVE_UNICA:
+        total += _fusionar_tabla(ruta_red, ruta_local, tabla)
+    total += _sincronizar_registros(ruta_red, ruta_local)
+    # Local -> Red
+    for tabla in _TABLAS_CON_CLAVE_UNICA:
+        total += _fusionar_tabla(ruta_local, ruta_red, tabla)
+    total += _sincronizar_registros(ruta_local, ruta_red)
+    return total
+
+def _buscar_bd_local_offline():
+    """
+    Busca una BD local que pudo quedar con datos mientras el equipo estuvo sin red.
+    Puede estar en LOCALAPPDATA + ActividadesData (fallback de config) o junto al exe.
+    """
+    candidatos = []
+    alt = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    candidatos.append(os.path.join(alt, "ActividadesData", "actividades.db"))
+    try:
+        from config import EXE_DIR
+        if EXE_DIR:
+            candidatos.append(os.path.join(EXE_DIR, "actividades.db"))
+    except Exception:
+        pass
+    resultado = []
+    for c in candidatos:
+        if os.path.exists(c):
+            resultado.append(c)
+    return resultado
+
 @retry_operation(max_retries=3, base_delay=0.5)
-def sincronizar_db_a_master():
-    """Copia la base de datos local de vuelta a la carpeta de red (si existe) para que otros la vean"""
+def sincronizar_red_a_local():
+    """
+    Sincroniza datos al abrir la aplicación:
+    1. Fusiona con la red cualquier BD local que haya quedado con datos sin conexión.
+    2. Copia la BD y Excel desde la red (MASTER_DIR) al directorio local.
+    Se ejecuta al iniciar la aplicación.
+    """
     if not MASTER_DIR or not os.path.exists(MASTER_DIR):
         return False
     
-    import shutil
-    try:
-        dest = os.path.join(MASTER_DIR, os.path.basename(DB_FILE))
-        # Solo copiar si el destino es diferente y escribible
-        if os.path.abspath(DB_FILE) != os.path.abspath(dest):
-            shutil.copy2(DB_FILE, dest)
-            logger.info(f"[OK] Sincronización exitosa: BD copiada a red: {dest}")
-            return True
-    except Exception as e:
-        logger.error(f"❌ Error sincronizando DB a master: {e}")
-    return False
+    red_db = os.path.join(MASTER_DIR, "actividades.db")
+    exito = False
+    
+    # 1. Fusionar BD locales que quedaron con datos (equipo estuvo sin red)
+    for local_db in _buscar_bd_local_offline():
+        if not _mismo_archivo(local_db, red_db) and not _mismo_archivo(local_db, DB_FILE):
+            n = _sincronizar_bidireccional(local_db, red_db)
+            if n:
+                exito = True
+                logger.info(f"[SYNC] Datos sin conexión fusionados con la red: {n} elemento(s) desde {local_db}")
+    
+    # 2. Fusionar la BD local activa con la red (si son archivos distintos)
+    if not _mismo_archivo(DB_FILE, red_db):
+        n = _sincronizar_bidireccional(DB_FILE, red_db)
+        if n:
+            exito = True
+    
+    # 3. Copiar Excel de red -> local (solo si no es el mismo archivo)
+    red_xlsx = os.path.join(MASTER_DIR, "actividades.xlsx")
+    if os.path.exists(red_xlsx) and not _mismo_archivo(red_xlsx, EXCEL_FILE):
+        if _intentar_copiar(red_xlsx, EXCEL_FILE, "Excel (red -> local)"):
+            exito = True
+    
+    if exito:
+        logger.info("[SYNC] Sincronización de apertura completada")
+    return exito
+
+@retry_operation(max_retries=3, base_delay=0.5)
+def sincronizar_db_a_master():
+    """
+    Sincroniza después de cada escritura:
+    Fusiona la BD local con la central de red (por registro/usuario, sin sobrescribir).
+    """
+    if not MASTER_DIR or not os.path.exists(MASTER_DIR):
+        return False
+    
+    red_db = os.path.join(MASTER_DIR, "actividades.db")
+    if not os.path.exists(red_db):
+        logger.warning("[SYNC] No existe la BD central en red, los datos quedan en local")
+        return False
+    
+    # Si la BD activa ES la central (modo normal), no hay nada que fusionar
+    if _mismo_archivo(DB_FILE, red_db):
+        return True
+    
+    n = _sincronizar_bidireccional(DB_FILE, red_db)
+    exito_xlsx = _intentar_copiar(EXCEL_FILE, os.path.join(MASTER_DIR, "actividades.xlsx"), "Excel (local -> red)")
+    
+    if n or exito_xlsx:
+        logger.info("[SYNC] Sincronización por registros completada")
+    return True
 
 def sincronizar_excel():
-    """Exporta todos los registros de la BD al archivo Excel (solo escritura, unidireccional)"""
+    """Exporta todos los registros de la BD al archivo Excel local"""
     try:
         df = cargar_registros()
         df_export = df.drop(columns=['ID']) if 'ID' in df.columns else df
@@ -620,8 +929,9 @@ def sincronizar_excel():
         exito = False
         while intentos > 0:
             try:
+                os.makedirs(os.path.dirname(EXCEL_FILE), exist_ok=True)
                 df_export.to_excel(EXCEL_FILE, index=False, engine='openpyxl')
-                logger.info(f"Excel exportado: {EXCEL_FILE}")
+                logger.info(f"Excel exportado local: {EXCEL_FILE}")
                 exito = True
                 break
             except PermissionError:
@@ -633,7 +943,12 @@ def sincronizar_excel():
                 logger.error(f"Error exportando Excel: {ex}")
                 break
         
-        sincronizar_db_a_master()
+        # Sync a red (no crítico, no debe impedir la operación principal)
+        try:
+            sincronizar_db_a_master()
+        except Exception:
+            pass
+        
         return exito
     except Exception as e:
         logger.error(f"Error en sincronizar_excel: {e}")
@@ -704,9 +1019,9 @@ def importar_desde_excel(file_path=None):
                         INSERT INTO registros (
                             usuario, tipo_actividad, fecha, dependencia, solicitante,
                             tipo_solicitud, medio_solicitud, descripcion, cumplido,
-                            fecha_atencion, observaciones
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    '''), values)
+                            fecha_atencion, observaciones, sync_uid, updated_at, borrado
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    '''), values + (uuid.uuid4().hex, _ahora(), 0))
                     count += 1
                 except Exception as e:
                     logger.error(f"Error importando fila: {e}")
@@ -724,13 +1039,26 @@ def importar_desde_excel(file_path=None):
 def cargar_registros(usuario=None):
     try:
         conn = get_db_connection()
-        query = "SELECT * FROM registros"
+        filtro = []
         params = []
+        
+        # Ocultar registros eliminados lógicamente (si la columna existe)
+        try:
+            cur = conn.execute("PRAGMA table_info(registros)")
+            cols = {r[1] for r in cur.fetchall()}
+            if "borrado" in cols:
+                filtro.append("COALESCE(borrado, 0) = 0")
+        except Exception:
+            pass
         
         # v6.9: Filtro estricto por usuario para la tabla principal
         if usuario:
-            query += " WHERE usuario = ?"
+            filtro.append("usuario = ?")
             params.append(usuario)
+            
+        query = "SELECT * FROM registros"
+        if filtro:
+            query += " WHERE " + " AND ".join(filtro)
             
         if DATABASE_URL:
             query = query.replace('?', '%s')
@@ -768,6 +1096,8 @@ def cargar_registros(usuario=None):
 @medir_tiempo
 def guardar_registro(data):
     try:
+        sync_uid = uuid.uuid4().hex
+        ahora = _ahora()
         with db_session() as conn:
             cursor = get_cursor(conn)
             
@@ -775,8 +1105,8 @@ def guardar_registro(data):
                 INSERT INTO registros (
                     usuario, tipo_actividad, fecha, dependencia, solicitante,
                     tipo_solicitud, medio_solicitud, descripcion, cumplido,
-                    fecha_atencion, observaciones
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    fecha_atencion, observaciones, sync_uid, updated_at, borrado
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
             
             insert_values = (
@@ -790,7 +1120,8 @@ def guardar_registro(data):
                 data.get("DESCRIPCIÓN"),
                 data.get("CUMPLIDO"),
                 data.get("FECHA ATENCIÓN"),
-                data.get("OBSERVACIONES")
+                data.get("OBSERVACIONES"),
+                sync_uid, ahora, 0
             )
             
             if DATABASE_URL:
@@ -828,7 +1159,8 @@ def eliminar_registro(id_registro, usuario):
                 if not row or row['usuario'] != usuario:
                     return False
 
-            cursor.execute(fix_query("DELETE FROM registros WHERE id = ?"), (id_registro,))
+            # Borrado lógico: se marca la fila y la sincronización propaga la eliminación a la red
+            cursor.execute(fix_query("UPDATE registros SET borrado = 1, updated_at = ? WHERE id = ?"), (_ahora(), id_registro))
 
         return True
     except Exception as e:
@@ -879,6 +1211,11 @@ def actualizar_registro(id_registro, data, usuario):
                         continue
                     fields.append(f"{inv_col_map[key]} = ?")
                     values.append(value)
+            
+            # Marcar actualización para que la sincronización propague el cambio
+            fields.append("updated_at = ?")
+            values.append(_ahora())
+            fields.append("borrado = 0")
             
             if not fields:
                 return True
