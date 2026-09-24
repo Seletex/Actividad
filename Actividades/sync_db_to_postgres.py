@@ -263,7 +263,7 @@ def principal():
             sys.exit(0)
 
     print("=" * 60)
-    print("  SINCRONIZACIÓN DE DATOS → PostgreSQL (Render)")
+    print("  SINCRONIZACION DE DATOS -> PostgreSQL (Render)")
     print("=" * 60)
     print(f"  Local SQLite : {ruta_local}")
     print(f"  Modo         : {args.modo}")
