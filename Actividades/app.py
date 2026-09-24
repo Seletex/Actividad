@@ -962,8 +962,9 @@ def initialize_app():
             inicializar_config()
             inicializar_excel()
         logger.info("Aplicación inicializada correctamente (Usuarios, Config, Excel)")
-    except Exception as e:
-        logger.error(f"Error durante la inicialización: {e}")
+    except Exception:
+        logger.exception("Error durante la inicialización")
+        raise
 
 
 initialize_app()

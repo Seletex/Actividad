@@ -105,6 +105,7 @@ def fix_query(query):
 @retry_operation(max_retries=5, base_delay=1.0)
 def inicializar_tablas():
     """Crea todas las tablas necesarias si no existen (SQLite y Postgres)"""
+    conn = None
     try:
         conn = get_db_connection()
         cursor = get_cursor(conn)
@@ -196,7 +197,8 @@ def inicializar_tablas():
                 "borrado INTEGER DEFAULT 0"
             )
             cursor.execute(
-                "UPDATE registros SET updated_at = COALESCE(updated_at, fecha) "
+                "UPDATE registros SET updated_at = "
+                "COALESCE(updated_at, CAST(fecha AS TEXT)) "
                 "WHERE updated_at IS NULL"
             )
             cursor.execute(
@@ -311,8 +313,18 @@ def inicializar_tablas():
         conn.commit()
         conn.close()
         logger.info("Base de datos inicializada correctamente.")
-    except Exception as e:
-        logger.error(f"Error crítico inicializando base de datos: {e}")
+    except Exception:
+        logger.exception("Error crítico inicializando base de datos")
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise
 
 def inicializar_tablas_postgres():
     """Stub para compatibilidad, redirige a inicializar_tablas"""
