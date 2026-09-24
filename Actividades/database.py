@@ -8,6 +8,8 @@ import os
 import json
 import uuid
 import hashlib
+import hmac
+import secrets
 import sqlite3
 import time
 import random
@@ -50,14 +52,15 @@ def retry_operation(max_retries=5, base_delay=0.5):
     return decorator
 
 def get_db_connection():
-    """Obtiene conexión a BD (PostgreSQL si hay URL, sino SQLite)"""
-    if DATABASE_URL and psycopg2:
+    """Obtiene una conexión a PostgreSQL o SQLite según la configuración."""
+    if DATABASE_URL:
+        if psycopg2 is None:
+            raise RuntimeError("DATABASE_URL está configurado, pero psycopg2 no está instalado")
         try:
-            conn = psycopg2.connect(DATABASE_URL)
-            return conn
-        except Exception as e:
-            logger.error(f"Error conectando a Postgres: {e}")
-            # Fallback a SQLite si falla Postgres (opcional)
+            return psycopg2.connect(DATABASE_URL)
+        except Exception:
+            logger.exception("No se pudo conectar a PostgreSQL")
+            raise
     
     # Resiliencia para SQLite en red
     conn = None
@@ -106,8 +109,58 @@ def inicializar_tablas():
         conn = get_db_connection()
         cursor = get_cursor(conn)
         
-        # 1. Crear tabla de usuarios
-        cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS usuarios (username TEXT PRIMARY KEY)"))
+        # 1. Crear tabla de usuarios con soporte de autenticación
+        cursor.execute(fix_query("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT,
+                password_salt TEXT,
+                debe_cambiar_contrasena INTEGER DEFAULT 0
+            )
+        """))
+
+        # Agregar columnas de seguridad a bases de datos existentes
+        if DATABASE_URL:
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_hash TEXT")
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_salt TEXT")
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS debe_cambiar_contrasena INTEGER DEFAULT 0")
+        else:
+            cols = [row[1] for row in cursor.execute("PRAGMA table_info(usuarios)").fetchall()]
+            if "password_hash" not in cols:
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN password_hash TEXT")
+            if "password_salt" not in cols:
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN password_salt TEXT")
+            if "debe_cambiar_contrasena" not in cols:
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN debe_cambiar_contrasena INTEGER DEFAULT 0")
+
+        # 1b. Crear tabla de auditoría con una clave válida en ambos motores
+        bitacora_query = """
+            CREATE TABLE IF NOT EXISTS bitacora (
+                id SERIAL PRIMARY KEY,
+                usuario TEXT,
+                accion TEXT,
+                detalle TEXT,
+                ip TEXT,
+                fecha TEXT
+            )
+        """
+        if not DATABASE_URL:
+            bitacora_query = bitacora_query.replace(
+                "SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT"
+            )
+        cursor.execute(fix_query(bitacora_query))
+
+        # Reparar tablas de auditoría antiguas creadas como INTEGER en PostgreSQL
+        if DATABASE_URL:
+            cursor.execute("CREATE SEQUENCE IF NOT EXISTS bitacora_id_seq")
+            cursor.execute(
+                "ALTER TABLE bitacora ALTER COLUMN id "
+                "SET DEFAULT NEXTVAL('bitacora_id_seq')"
+            )
+            cursor.execute(
+                "SELECT setval('bitacora_id_seq', "
+                "COALESCE((SELECT MAX(id) FROM bitacora), 0) + 1, false)"
+            )
         
         # 2. Crear tabla de actividades personales
         cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS actividades_personales (username TEXT, actividad TEXT, UNIQUE(username, actividad))"))
@@ -133,6 +186,22 @@ def inicializar_tablas():
             query_registros = query_registros.replace('SERIAL PRIMARY KEY', 'INTEGER PRIMARY KEY AUTOINCREMENT')
         
         cursor.execute(fix_query(query_registros))
+
+        # Asegurar columnas de sincronización también en PostgreSQL
+        if DATABASE_URL:
+            cursor.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS sync_uid TEXT")
+            cursor.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS updated_at TEXT")
+            cursor.execute(
+                "ALTER TABLE registros ADD COLUMN IF NOT EXISTS "
+                "borrado INTEGER DEFAULT 0"
+            )
+            cursor.execute(
+                "UPDATE registros SET updated_at = COALESCE(updated_at, fecha) "
+                "WHERE updated_at IS NULL"
+            )
+            cursor.execute(
+                "UPDATE registros SET borrado = 0 WHERE borrado IS NULL"
+            )
         
         # 6. Asegurar usuario admin
         if DATABASE_URL:
@@ -255,17 +324,15 @@ def inicializar_tablas_postgres():
 
 @medir_tiempo
 def inicializar_usuarios():
-    """Punto de entrada para inicialización desde app_web.py"""
-    # 1. Sincronizar datos más recientes desde la red (si está disponible)
-    try:
-        sincronizar_red_a_local()
-    except Exception as e:
-        logger.warning(f"[INIT] No se pudo sincronizar desde red: {e}")
+    """Punto de entrada para inicialización desde app_web.py."""
+    # PostgreSQL es la fuente de verdad en web; no intentar sincronizar archivos de red.
+    if not DATABASE_URL:
+        try:
+            sincronizar_red_a_local()
+        except Exception as e:
+            logger.warning(f"[INIT] No se pudo sincronizar desde red: {e}")
     
-    # 2. Asegurar tablas
     inicializar_tablas()
-    
-    # 3. Limpiar caché inicial
     clear_cache()
 
 def inicializar_config():
@@ -370,12 +437,247 @@ def guardar_usuarios(data):
         logger.error(f"Error sincronizando usuarios SQL: {e}")
         return False
 
+
+# =============================================================================
+# AUTENTICACIÓN Y AUDITORÍA
+# =============================================================================
+
+_PBKDF2_ITER = 260_000
+
+
+def _hash_contrasena(contrasena, salt=None):
+    """Genera un hash PBKDF2-SHA256 y su sal aleatoria."""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        contrasena.encode("utf-8"),
+        bytes.fromhex(salt),
+        _PBKDF2_ITER,
+    ).hex()
+    return digest, salt
+
+
+def _verificar_contrasena(contrasena, hash_guardado, salt):
+    """Verifica una contraseña sin comparar valores de forma vulnerable a timing."""
+    if not hash_guardado or not salt:
+        return False
+    candidate, _ = _hash_contrasena(contrasena, salt)
+    return hmac.compare_digest(candidate, hash_guardado)
+
+
+def verificar_credenciales(usuario, contrasena):
+    """Valida usuario y contraseña.
+
+    Devuelve ``(True, info)`` o ``(False, motivo)``. Los usuarios sin
+    contraseña configurada no pueden acceder a la aplicación web.
+    """
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "SELECT username, password_hash, password_salt, "
+                    "debe_cambiar_contrasena FROM usuarios WHERE username = ?"
+                ),
+                (usuario,),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            return False, "usuario_inexistente"
+        if not row["password_hash"]:
+            return False, "sin_contrasena"
+        if not _verificar_contrasena(
+            contrasena, row["password_hash"], row["password_salt"]
+        ):
+            return False, "clave_incorrecta"
+
+        return True, {
+            "username": row["username"],
+            "debe_cambiar": bool(row["debe_cambiar_contrasena"]),
+        }
+    except Exception:
+        logger.exception("Error verificando credenciales")
+        return False, "error"
+
+
+def establecer_contrasena(usuario, contrasena, limpiar_debe_cambiar=True):
+    """Establece o cambia la contraseña de un usuario."""
+    if not contrasena or len(contrasena) < 6:
+        return False, "La contraseña debe tener al menos 6 caracteres"
+
+    try:
+        password_hash, password_salt = _hash_contrasena(contrasena)
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "UPDATE usuarios SET password_hash = ?, password_salt = ?, "
+                    "debe_cambiar_contrasena = ? WHERE username = ?"
+                ),
+                (
+                    password_hash,
+                    password_salt,
+                    0 if limpiar_debe_cambiar else 1,
+                    usuario,
+                ),
+            )
+            if cursor.rowcount == 0:
+                return False, "El usuario no existe"
+        clear_cache()
+        return True, "Contraseña actualizada correctamente"
+    except Exception:
+        logger.exception("Error estableciendo contraseña")
+        return False, "Error al actualizar la contraseña"
+
+
+def marcar_debe_cambiar_contrasena(usuario, debe_cambiar=True):
+    """Marca o desmarca el cambio de contraseña para el próximo ingreso."""
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "UPDATE usuarios SET debe_cambiar_contrasena = ? "
+                    "WHERE username = ?"
+                ),
+                (1 if debe_cambiar else 0, usuario),
+            )
+        clear_cache()
+        return True
+    except Exception:
+        logger.exception("Error marcando cambio de contraseña")
+        return False
+
+
+def usuario_debe_cambiar_contrasena(usuario):
+    """Indica si el usuario debe cambiar su contraseña en el próximo ingreso."""
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "SELECT debe_cambiar_contrasena FROM usuarios "
+                    "WHERE username = ?"
+                ),
+                (usuario,),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        return bool(row and row["debe_cambiar_contrasena"])
+    except Exception:
+        logger.exception("Error consultando cambio de contraseña")
+        return False
+
+
+def usuario_tiene_contrasena(usuario):
+    """Indica si el usuario ya configuró una contraseña."""
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query("SELECT password_hash FROM usuarios WHERE username = ?"),
+                (usuario,),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        return bool(row and row["password_hash"])
+    except Exception:
+        logger.exception("Error consultando contraseña configurada")
+        return False
+
+
+def registrar_auditoria(usuario, accion, detalle="", ip=""):
+    """Registra una acción sin impedir la operación principal si falla."""
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "INSERT INTO bitacora (usuario, accion, detalle, ip, fecha) "
+                    "VALUES (?, ?, ?, ?, ?)"
+                ),
+                (
+                    usuario,
+                    accion,
+                    str(detalle)[:1000],
+                    ip or "",
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+    except Exception:
+        logger.exception("Error registrando auditoría")
+
+
+def obtener_bitacora(limite=500):
+    """Devuelve los eventos de auditoría más recientes."""
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "SELECT id, usuario, accion, detalle, ip, fecha "
+                    "FROM bitacora ORDER BY id DESC LIMIT ?"
+                ),
+                (limite,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("Error obteniendo bitácora")
+        return []
+
+
+def limpiar_bitacora():
+    """Elimina todos los registros de auditoría."""
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(fix_query("DELETE FROM bitacora"))
+        return True
+    except Exception:
+        logger.exception("Error limpiando bitácora")
+        return False
+
+
+def obtener_ultimo_acceso(usuario):
+    """Devuelve la fecha del último acceso registrado de un usuario."""
+    try:
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "SELECT MAX(fecha) as f FROM bitacora "
+                    "WHERE usuario = ? AND accion = 'LOGIN'"
+                ),
+                (usuario,),
+            )
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        return row["f"] if row else None
+    except Exception:
+        logger.exception("Error obteniendo último acceso")
+        return None
+
+
 @medir_tiempo
 def obtener_configuracion_usuario(usuario):
     """Obtiene la configuración personalizada de un usuario"""
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         # En el modelo actual, guardamos claves individuales.
         # Pero por compatibilidad, la función espera un dict completo de config.
         # Vamos a reconstruirlo.
@@ -803,13 +1105,30 @@ def _intentar_copiar(origen, destino, descripcion, max_intentos=3):
     return False
 
 def _fusionar_tabla(origen, destino, tabla):
-    """Agrega a 'destino' las filas de 'origen' que no existan (por clave única)."""
+    """Agrega filas nuevas usando únicamente columnas compatibles entre ambas bases."""
     if _mismo_archivo(origen, destino) or not os.path.exists(origen) or not os.path.exists(destino):
         return 0
     try:
         con = sqlite3.connect(destino, timeout=60)
         con.execute("ATTACH DATABASE ? AS src", (origen,))
-        cur = con.execute(f"INSERT OR IGNORE INTO {tabla} SELECT * FROM src.{tabla}")
+        dest_cols = [
+            row[1] for row in con.execute(f'PRAGMA table_info("{tabla}")').fetchall()
+        ]
+        src_cols = {
+            row[1]
+            for row in con.execute(f'PRAGMA src.table_info("{tabla}")').fetchall()
+        }
+        common_cols = [col for col in dest_cols if col in src_cols]
+        if not common_cols:
+            con.execute("DETACH DATABASE src")
+            con.close()
+            return 0
+
+        columns_sql = ", ".join(f'"{col}"' for col in common_cols)
+        cur = con.execute(
+            f'INSERT OR IGNORE INTO "{tabla}" ({columns_sql}) '
+            f'SELECT {columns_sql} FROM src."{tabla}"'
+        )
         con.commit()
         n = cur.rowcount
         con.execute("DETACH DATABASE src")
@@ -862,7 +1181,7 @@ def sincronizar_red_a_local():
     2. Copia la BD y Excel desde la red (MASTER_DIR) al directorio local.
     Se ejecuta al iniciar la aplicación.
     """
-    if not MASTER_DIR or not os.path.exists(MASTER_DIR):
+    if DATABASE_URL or not MASTER_DIR or not os.path.exists(MASTER_DIR):
         return False
     
     red_db = os.path.join(MASTER_DIR, "actividades.db")
@@ -898,7 +1217,7 @@ def sincronizar_db_a_master():
     Sincroniza después de cada escritura:
     Fusiona la BD local con la central de red (por registro/usuario, sin sobrescribir).
     """
-    if not MASTER_DIR or not os.path.exists(MASTER_DIR):
+    if DATABASE_URL or not MASTER_DIR or not os.path.exists(MASTER_DIR):
         return False
     
     red_db = os.path.join(MASTER_DIR, "actividades.db")
@@ -918,7 +1237,11 @@ def sincronizar_db_a_master():
     return True
 
 def sincronizar_excel():
-    """Exporta todos los registros de la BD al archivo Excel local"""
+    """Exporta todos los registros de la BD al archivo Excel local."""
+    # En PostgreSQL el Excel es un formato de salida, no una fuente de verdad.
+    if DATABASE_URL:
+        return True
+
     try:
         df = cargar_registros()
         df_export = df.drop(columns=['ID']) if 'ID' in df.columns else df
@@ -1042,14 +1365,17 @@ def cargar_registros(usuario=None):
         filtro = []
         params = []
         
-        # Ocultar registros eliminados lógicamente (si la columna existe)
-        try:
-            cur = conn.execute("PRAGMA table_info(registros)")
-            cols = {r[1] for r in cur.fetchall()}
-            if "borrado" in cols:
-                filtro.append("COALESCE(borrado, 0) = 0")
-        except Exception:
-            pass
+        # Ocultar registros eliminados lógicamente
+        if DATABASE_URL:
+            filtro.append("COALESCE(borrado, 0) = 0")
+        else:
+            try:
+                cur = conn.execute("PRAGMA table_info(registros)")
+                cols = {r[1] for r in cur.fetchall()}
+                if "borrado" in cols:
+                    filtro.append("COALESCE(borrado, 0) = 0")
+            except Exception:
+                pass
         
         # v6.9: Filtro estricto por usuario para la tabla principal
         if usuario:

@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
+import os
 import sqlite3
 import psycopg2
 from psycopg2.extras import execute_values
 import sys
 
 def main():
-    pg_url = 'postgresql://actividades_db_ne02_user:wv2ifYfkakGXoJ4qjEfbRW5PZC88cNRH@dpg-daop2bek1f9s7385ucug-a.oregon-postgres.render.com/actividades_db_ne02'
+    pg_url = os.environ.get('DATABASE_URL', '').strip()
+    if not pg_url:
+        print('Falta la variable de entorno DATABASE_URL', file=sys.stderr)
+        return 1
     sqlite_path = 'actividades.db'
 
     print("Conectando a bases de datos...", flush=True)

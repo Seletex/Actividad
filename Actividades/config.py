@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import shutil
+import tempfile
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -110,6 +111,14 @@ def _resolve_data_dir():
     2. Si la red no está disponible, fallback a carpeta local del usuario.
     """
     global MASTER_DIR
+
+    # En despliegue con PostgreSQL no se debe intentar acceder a la ruta UNC.
+    if os.environ.get("DATABASE_URL"):
+        cloud_dir = os.environ.get("ACTIVIDADES_DATA_DIR") or os.path.join(
+            tempfile.gettempdir(), "actividades-web"
+        )
+        os.makedirs(cloud_dir, exist_ok=True)
+        return cloud_dir
 
     # 1. Usar siempre la BD central en red
     try:
