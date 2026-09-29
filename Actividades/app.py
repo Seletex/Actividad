@@ -39,6 +39,7 @@ from web_security import (
 from activity_service import agregar_actividad_personal, eliminar_actividad_personal
 from admin_bootstrap import aplicar_password_admin_inicial
 from excel_import_service import reemplazar_registros_desde_excel
+from user_data_service import sincronizar_datos_usuarios
 from export_service import (
     exportar_registros_filtrados, obtener_estadisticas_exportacion,
     generar_informe_template
@@ -297,6 +298,24 @@ def _html_importacion(usuario_actual):
             </form>
         </div>
     </div>
+
+    <div class="card mb-4 border-info">
+        <div class="card-header bg-info text-white">
+            <h5 class="mb-0"><i class="fas fa-users-cog"></i> Sincronizar usuarios y configuraciones</h5>
+        </div>
+        <div class="card-body">
+            <p class="small mb-3">
+                Carga usuarios, actividades personales y datos de contrato desde
+                <code>usuarios.json</code>. Las contraseñas existentes no se modifican.
+            </p>
+            <form method="POST" action="/sincronizar_usuarios">
+                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <button type="submit" class="btn btn-info">
+                    <i class="fas fa-sync-alt"></i> Sincronizar datos de usuarios
+                </button>
+            </form>
+        </div>
+    </div>
     """
 
 
@@ -534,6 +553,35 @@ def reemplazar_registros():
                 pass
 
 
+@app.route('/sincronizar_usuarios', methods=['POST'])
+@login_required
+@admin_required
+@csrf_protect
+def sincronizar_usuarios():
+    """Sincroniza usuarios y configuraciones desde usuarios.json."""
+    try:
+        resultado = sincronizar_datos_usuarios()
+        resumen = resultado["resumen"]
+        registrar_auditoria(
+            session.get('usuario'),
+            "SINCRONIZAR_USUARIOS",
+            (
+                f"Usuarios nuevos: {resumen['usuarios_nuevos']}; "
+                f"actividades: {resumen['actividades']}; "
+                f"configuraciones: {resumen['configuraciones']}; "
+                f"listas: {resumen['listas']}"
+            ),
+            _ip_cliente(),
+        )
+        return redirect(url_for('gestion', msg='Usuarios y configuraciones sincronizados'))
+    except FileNotFoundError:
+        logger.exception("No se encontró usuarios.json")
+        return redirect(url_for('gestion', error='No se encontró usuarios.json en el servidor'))
+    except Exception:
+        logger.exception("Error sincronizando datos de usuarios")
+        return redirect(url_for('gestion', error='No se pudieron sincronizar los usuarios'))
+
+
 @app.route('/agregar_registro', methods=['POST'])
 @login_required
 @csrf_protect
@@ -742,8 +790,12 @@ def gestion():
 
     contrato_vals = {}
     try:
-        cfg = obtener_configuracion_usuario('admin')
-        contrato_vals = cfg.get('datos_contrato', {}) if cfg else {}
+        cfg = obtener_configuracion_usuario(usuario_actual)
+        datos_contrato = cfg.get('datos_contrato', {}) if cfg else {}
+        contrato_vals = {
+            clave: html.escape(str(datos_contrato.get(clave, '') or ''))
+            for clave in ('nro', 'objeto', 'nombre', 'cedula', 'supervisor')
+        }
     except Exception:
         contrato_vals = {}
 
@@ -890,10 +942,10 @@ def asignar_contrasena():
 
 @app.route('/guardar_datos_contrato', methods=['POST'])
 @login_required
-@admin_required
 @csrf_protect
 def guardar_datos_contrato():
     ip = _ip_cliente()
+    usuario = session.get('usuario')
     datos = {
         'nro': sanitizar(request.form.get('nro'), 100),
         'objeto': sanitizar(request.form.get('objeto'), 500),
@@ -902,8 +954,8 @@ def guardar_datos_contrato():
         'supervisor': sanitizar(request.form.get('supervisor'), 150)
     }
     try:
-        guardar_configuracion_usuario('admin', {'datos_contrato': datos})
-        registrar_auditoria(session.get('usuario'), "CONFIG_CONTRATO", "Datos de contrato actualizados", ip)
+        guardar_configuracion_usuario(usuario, {'datos_contrato': datos})
+        registrar_auditoria(usuario, "CONFIG_CONTRATO", "Datos de contrato actualizados", ip)
         return redirect(url_for('gestion', msg='Datos de contrato guardados'))
     except Exception:
         return redirect(url_for('gestion', error='Error al guardar'))
