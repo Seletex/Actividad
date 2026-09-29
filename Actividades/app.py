@@ -24,7 +24,7 @@ from database import (
     cargar_ubicaciones, guardar_ubicaciones,
     cargar_tipos_solicitud, guardar_tipos_solicitud,
     cargar_medios_solicitud, guardar_medios_solicitud,
-    cargar_registros, guardar_registro, eliminar_registro,
+    cargar_registros, guardar_registro, actualizar_registro, eliminar_registro,
     obtener_configuracion_usuario, guardar_configuracion_usuario,
     verificar_credenciales, establecer_contrasena, usuario_tiene_contrasena,
     usuario_debe_cambiar_contrasena, marcar_debe_cambiar_contrasena,
@@ -48,12 +48,13 @@ from html_utils import (
     generar_gestion_actividades_globales, generar_gestion_actividades_personales,
     generar_gestion_ubicaciones, generar_gestion_tipos_solicitud,
     generar_gestion_medios_solicitud, generar_tabla_registros_recientes,
+    generar_tabla_actividades_completa, generar_opciones_con_seleccion,
     generar_gestion_contrasena, generar_gestion_auditoria
 )
 from templates import (
-    LOGIN_TEMPLATE, MAIN_TEMPLATE, GESTION_TEMPLATE,
+    LOGIN_TEMPLATE, MAIN_TEMPLATE, GESTION_TEMPLATE, LISTADO_TEMPLATE,
     EXPORTAR_TEMPLATE, ESTADISTICAS_TEMPLATE, FORMULARIO_REGISTRO,
-    ACCESO_GRANTED_TEMPLATE, CAMBIAR_CONTRASENA_TEMPLATE
+    EDIT_REGISTRO_TEMPLATE, ACCESO_GRANTED_TEMPLATE, CAMBIAR_CONTRASENA_TEMPLATE
 )
 
 app = Flask(__name__)
@@ -184,6 +185,189 @@ def index():
         importar_html=importar_html
     )
     return _inyectar_csrf(page)
+
+
+def _alertas_listado():
+    """Construye los mensajes de resultado de las rutas de listado."""
+    if request.args.get('success'):
+        return (
+            '<div class="alert alert-success alert-dismissible fade show">'
+            '✅ Registro actualizado correctamente'
+            '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>'
+            '</div>'
+        )
+    if request.args.get('error'):
+        return (
+            '<div class="alert alert-danger alert-dismissible fade show">❌ '
+            + html.escape(str(request.args['error']))
+            + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>'
+            '</div>'
+        )
+    return ""
+
+
+def _opciones_con_valor_actual(items, valor_actual):
+    """Genera opciones y conserva el valor aunque ya no esté en el catálogo."""
+    opciones = list(items or [])
+    if valor_actual and valor_actual not in opciones:
+        opciones.append(valor_actual)
+    return generar_opciones_con_seleccion(opciones, valor_actual)
+
+
+def _fecha_valida(valor):
+    """Normaliza una fecha de formulario a YYYY-MM-DD."""
+    valor = sanitizar(valor or "", 10)
+    if not valor:
+        return ""
+    try:
+        return datetime.strptime(valor, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+@app.route('/listado', methods=['GET'])
+@login_required
+@cambio_requerido
+def listado():
+    """Muestra el historial completo de actividades del usuario."""
+    usuario_actual = session.get('usuario')
+    fecha_inicio = _fecha_valida(request.args.get('fecha_inicio', ''))
+    fecha_fin = _fecha_valida(request.args.get('fecha_fin', ''))
+    estado = request.args.get('estado', 'Todos').strip()
+    if estado not in ('Todos', 'Sí', 'No'):
+        estado = 'Todos'
+
+    df = cargar_registros(None if usuario_actual == 'admin' else usuario_actual)
+
+    if not df.empty:
+        columna_fecha = None
+        if 'FECHA ATENCIÓN' in df.columns:
+            columna_fecha = df['FECHA ATENCIÓN']
+        elif 'FECHA' in df.columns:
+            columna_fecha = df['FECHA']
+
+        if columna_fecha is not None:
+            fechas = columna_fecha.fillna('').astype(str).str.slice(0, 10)
+            if fecha_inicio:
+                df = df[fechas >= fecha_inicio]
+                fechas = fechas.loc[df.index]
+            if fecha_fin:
+                df = df[fechas <= fecha_fin]
+
+        if estado != 'Todos' and 'CUMPLIDO' in df.columns:
+            df = df[df['CUMPLIDO'].fillna('').astype(str) == estado]
+
+    tabla_html = generar_tabla_actividades_completa(df, usuario_actual)
+    page = LISTADO_TEMPLATE.format(
+        usuario_actual=usuario_actual,
+        alertas=_alertas_listado(),
+        tabla_registros=tabla_html,
+        val_fecha_inicio=fecha_inicio,
+        val_fecha_fin=fecha_fin,
+        sel_todos='selected' if estado == 'Todos' else '',
+        sel_si='selected' if estado == 'Sí' else '',
+        sel_no='selected' if estado == 'No' else '',
+        importar_html="",
+    )
+    return _inyectar_csrf(page)
+
+
+@app.route('/editar_registro', methods=['GET'])
+@login_required
+@cambio_requerido
+def editar_registro():
+    """Muestra el formulario de edición de un registro."""
+    usuario_actual = session.get('usuario')
+    id_registro = request.args.get('id_registro', '').strip()
+    if not id_registro.isdigit():
+        return redirect(url_for('listado', error='Identificador de registro inválido'))
+
+    df = cargar_registros(None if usuario_actual == 'admin' else usuario_actual)
+    if df.empty or 'ID' not in df.columns:
+        return redirect(url_for('listado', error='Registro no encontrado'))
+
+    identificadores = df['ID'].fillna('').astype(str).str.replace(
+        r'\.0$', '', regex=True
+    )
+    coincidencias = df[identificadores == id_registro]
+    if coincidencias.empty:
+        return redirect(url_for('listado', error='Registro no encontrado'))
+
+    registro = coincidencias.iloc[0]
+    actividad = str(registro.get('TIPO DE ACTIVIDAD', '') or '')
+    ubicacion = str(registro.get('DEPENDENCIA', '') or '')
+    tipo_solicitud = str(registro.get('TIPO DE SOLICITUD', '') or '')
+    medio_solicitud = str(registro.get('MEDIO DE SOLICITUD', '') or '')
+    fecha_atencion = str(registro.get('FECHA ATENCIÓN', '') or '')[:10]
+    cumplido = str(registro.get('CUMPLIDO', '') or '')
+
+    page = EDIT_REGISTRO_TEMPLATE.format(
+        usuario_actual=usuario_actual,
+        id_reg=id_registro,
+        opciones_actividades=_opciones_con_valor_actual(
+            cargar_actividades(usuario_actual), actividad
+        ),
+        opciones_ubicaciones=_opciones_con_valor_actual(
+            cargar_ubicaciones(), ubicacion
+        ),
+        opciones_tipos=_opciones_con_valor_actual(
+            cargar_tipos_solicitud(), tipo_solicitud
+        ),
+        opciones_medios=_opciones_con_valor_actual(
+            cargar_medios_solicitud(), medio_solicitud
+        ),
+        val_solicitante=html.escape(
+            str(registro.get('SOLICITANTE', '') or '')
+        ),
+        sel_cumplido_si='selected' if cumplido == 'Sí' else '',
+        sel_cumplido_no='selected' if cumplido == 'No' else '',
+        val_fecha_atencion=fecha_atencion,
+        val_observaciones=html.escape(
+            str(registro.get('OBSERVACIONES', '') or '')
+        ),
+    )
+    return _inyectar_csrf(page)
+
+
+@app.route('/actualizar_registro_accion', methods=['POST'])
+@login_required
+@cambio_requerido
+@csrf_protect
+def actualizar_registro_accion():
+    """Guarda los cambios enviados desde la edición de un registro."""
+    usuario_actual = session.get('usuario')
+    ip = _ip_cliente()
+    id_registro = request.form.get('id_registro', '').strip()
+    if not id_registro.isdigit():
+        return redirect(url_for('listado', error='Identificador de registro inválido'))
+
+    cumplido = sanitizar(request.form.get('cumplido', 'No'), 20)
+    if cumplido not in ('Sí', 'No'):
+        return redirect(url_for('listado', error='Estado de cumplimiento inválido'))
+
+    fecha_atencion = _fecha_valida(request.form.get('fecha_atencion', ''))
+
+    datos = {
+        'TIPO DE ACTIVIDAD': sanitizar(request.form.get('actividad'), 200),
+        'DEPENDENCIA': sanitizar(request.form.get('ubicacion'), 120),
+        'SOLICITANTE': sanitizar(request.form.get('solicitante'), 120),
+        'TIPO DE SOLICITUD': sanitizar(request.form.get('tipo_solicitud'), 120),
+        'MEDIO DE SOLICITUD': sanitizar(request.form.get('medio_solicitud'), 120),
+        'CUMPLIDO': cumplido,
+        'FECHA ATENCIÓN': fecha_atencion,
+        'OBSERVACIONES': sanitizar(request.form.get('observaciones'), 1000),
+    }
+
+    if actualizar_registro(int(id_registro), datos, usuario_actual):
+        registrar_auditoria(
+            usuario_actual,
+            "ACTUALIZAR_REGISTRO",
+            f"Registro ID {id_registro}",
+            ip,
+        )
+        return redirect(url_for('listado', success=1))
+
+    return redirect(url_for('listado', error='No se pudo actualizar el registro'))
 
 
 @app.route('/agregar_registro', methods=['POST'])
