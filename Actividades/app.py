@@ -25,6 +25,7 @@ from database import (
     cargar_tipos_solicitud, guardar_tipos_solicitud,
     cargar_medios_solicitud, guardar_medios_solicitud,
     cargar_registros, guardar_registro, actualizar_registro, eliminar_registro,
+    importar_desde_excel,
     obtener_configuracion_usuario, guardar_configuracion_usuario,
     verificar_credenciales, establecer_contrasena, usuario_tiene_contrasena,
     usuario_debe_cambiar_contrasena, marcar_debe_cambiar_contrasena,
@@ -164,18 +165,7 @@ def index():
             fecha_hoy=datetime.now().strftime('%Y-%m-%d')
         )
 
-    importar_html = ""
-    if usuario_actual == 'admin':
-        importar_html = """
-        <div class="card mb-4 border-warning">
-          <div class="card-header bg-warning text-dark">
-            <h5 class="mb-0"><i class="fas fa-file-import"></i> 📥 Importar Datos / Reportes</h5>
-          </div>
-          <div class="card-body">
-            <p class="small mb-0">Use la sección <b>Exportar</b> para generar reportes e importar datos desde Excel.</p>
-          </div>
-        </div>
-        """
+    importar_html = _html_importacion(usuario_actual)
 
     page = MAIN_TEMPLATE.format(
         usuario_actual=usuario_actual,
@@ -189,11 +179,26 @@ def index():
 
 def _alertas_listado():
     """Construye los mensajes de resultado de las rutas de listado."""
-    if request.args.get('success'):
+    success = request.args.get('success', '')
+    if success.startswith('importados_'):
+        try:
+            total = max(0, int(success.split('_', 1)[1]))
+        except (TypeError, ValueError):
+            total = 0
+        mensaje = (
+            f'Importación completada: {total} registro(s) nuevo(s) '
+            'agregados a PostgreSQL.'
+        )
+    elif success:
+        mensaje = 'Registro actualizado correctamente'
+    else:
+        mensaje = ''
+
+    if mensaje:
         return (
-            '<div class="alert alert-success alert-dismissible fade show">'
-            '✅ Registro actualizado correctamente'
-            '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>'
+            '<div class="alert alert-success alert-dismissible fade show">✅ '
+            + html.escape(mensaje)
+            + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>'
             '</div>'
         )
     if request.args.get('error'):
@@ -223,6 +228,38 @@ def _fecha_valida(valor):
         return datetime.strptime(valor, "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError:
         return ""
+
+
+def _html_importacion(usuario_actual):
+    """Muestra el formulario de carga de Excel únicamente al administrador."""
+    if usuario_actual != "admin":
+        return ""
+    return """
+    <div class="card mb-4 border-warning">
+        <div class="card-header bg-warning text-dark">
+            <h5 class="mb-0"><i class="fas fa-file-import"></i> Importar registros desde Excel</h5>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="/importar_excel" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-8">
+                        <label class="form-label">Archivo .xlsx</label>
+                        <input type="file" name="archivo" class="form-control" accept=".xlsx" required>
+                        <div class="form-text">
+                            Solo se agregan registros que no existan. No se eliminan datos actuales.
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-warning w-100">
+                            <i class="fas fa-upload"></i> Importar a PostgreSQL
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+    """
 
 
 @app.route('/listado', methods=['GET'])
@@ -267,7 +304,7 @@ def listado():
         sel_todos='selected' if estado == 'Todos' else '',
         sel_si='selected' if estado == 'Sí' else '',
         sel_no='selected' if estado == 'No' else '',
-        importar_html="",
+        importar_html=_html_importacion(usuario_actual),
     )
     return _inyectar_csrf(page)
 
@@ -368,6 +405,48 @@ def actualizar_registro_accion():
         return redirect(url_for('listado', success=1))
 
     return redirect(url_for('listado', error='No se pudo actualizar el registro'))
+
+
+@app.route('/importar_excel', methods=['POST'])
+@login_required
+@admin_required
+@csrf_protect
+def importar_excel():
+    """Importa un archivo Excel enviado por el administrador."""
+    archivo = request.files.get('archivo')
+    if not archivo or not archivo.filename:
+        return redirect(url_for('listado', error='Seleccione un archivo Excel'))
+
+    nombre = archivo.filename.lower()
+    if not nombre.endswith('.xlsx'):
+        return redirect(url_for('listado', error='El archivo debe tener extensión .xlsx'))
+
+    ruta_temporal = None
+    try:
+        descriptor, ruta_temporal = tempfile.mkstemp(suffix='.xlsx')
+        os.close(descriptor)
+        archivo.save(ruta_temporal)
+
+        if os.path.getsize(ruta_temporal) == 0:
+            return redirect(url_for('listado', error='El archivo Excel está vacío'))
+
+        insertados = importar_desde_excel(ruta_temporal)
+        registrar_auditoria(
+            session.get('usuario'),
+            "IMPORTAR_EXCEL",
+            f"Registros agregados: {insertados}",
+            _ip_cliente(),
+        )
+        return redirect(url_for('listado', success=f'importados_{insertados}'))
+    except Exception:
+        logger.exception("Error importando archivo Excel")
+        return redirect(url_for('listado', error='No se pudo importar el archivo Excel'))
+    finally:
+        if ruta_temporal and os.path.exists(ruta_temporal):
+            try:
+                os.remove(ruta_temporal)
+            except Exception:
+                pass
 
 
 @app.route('/agregar_registro', methods=['POST'])
