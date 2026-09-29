@@ -38,6 +38,7 @@ from web_security import (
 )
 from activity_service import agregar_actividad_personal, eliminar_actividad_personal
 from admin_bootstrap import aplicar_password_admin_inicial
+from excel_import_service import reemplazar_registros_desde_excel
 from export_service import (
     exportar_registros_filtrados, obtener_estadisticas_exportacion,
     generar_informe_template
@@ -189,6 +190,15 @@ def _alertas_listado():
             f'Importación completada: {total} registro(s) nuevo(s) '
             'agregados a PostgreSQL.'
         )
+    elif success.startswith('reemplazados_'):
+        try:
+            total = max(0, int(success.split('_', 1)[1]))
+        except (TypeError, ValueError):
+            total = 0
+        mensaje = (
+            f'Reemplazo completado: la tabla quedó con {total} registro(s). '
+            'Se creó un respaldo antes de reemplazar.'
+        )
     elif success:
         mensaje = 'Registro actualizado correctamente'
     else:
@@ -253,6 +263,34 @@ def _html_importacion(usuario_actual):
                     <div class="col-md-4">
                         <button type="submit" class="btn btn-warning w-100">
                             <i class="fas fa-upload"></i> Importar a PostgreSQL
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card mb-4 border-danger">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0"><i class="fas fa-database"></i> Reemplazar todos los registros</h5>
+        </div>
+        <div class="card-body">
+            <p class="small text-danger">
+                Esta opción crea un respaldo y luego deja la tabla exactamente con
+                los registros del archivo. Úsela solo con el Excel de migración validado.
+            </p>
+            <form method="POST" action="/reemplazar_registros" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <input type="hidden" name="confirmacion" value="REEMPLAZAR_DATOS">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-8">
+                        <label class="form-label">Archivo .xlsx de migración</label>
+                        <input type="file" name="archivo" class="form-control" accept=".xlsx" required>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-danger w-100"
+                                onclick="return confirm('Se respaldarán los datos actuales y se reemplazarán por los del archivo. ¿Continuar?')">
+                            <i class="fas fa-exchange-alt"></i> Respaldar y reemplazar
                         </button>
                     </div>
                 </div>
@@ -441,6 +479,53 @@ def importar_excel():
     except Exception:
         logger.exception("Error importando archivo Excel")
         return redirect(url_for('listado', error='No se pudo importar el archivo Excel'))
+    finally:
+        if ruta_temporal and os.path.exists(ruta_temporal):
+            try:
+                os.remove(ruta_temporal)
+            except Exception:
+                pass
+
+
+@app.route('/reemplazar_registros', methods=['POST'])
+@login_required
+@admin_required
+@csrf_protect
+def reemplazar_registros():
+    """Reemplaza la tabla de registros con un Excel, creando un respaldo."""
+    if request.form.get('confirmacion') != 'REEMPLAZAR_DATOS':
+        return redirect(url_for('listado', error='Debe confirmar el reemplazo de datos'))
+
+    archivo = request.files.get('archivo')
+    if not archivo or not archivo.filename:
+        return redirect(url_for('listado', error='Seleccione un archivo Excel'))
+    if not archivo.filename.lower().endswith('.xlsx'):
+        return redirect(url_for('listado', error='El archivo debe tener extensión .xlsx'))
+
+    ruta_temporal = None
+    try:
+        descriptor, ruta_temporal = tempfile.mkstemp(suffix='.xlsx')
+        os.close(descriptor)
+        archivo.save(ruta_temporal)
+        resultado = reemplazar_registros_desde_excel(ruta_temporal)
+        registrar_auditoria(
+            session.get('usuario'),
+            "REEMPLAZAR_REGISTROS",
+            (
+                f"Total reemplazado: {resultado['total']}; "
+                f"respaldo: {resultado['respaldo']}"
+            ),
+            _ip_cliente(),
+        )
+        return redirect(
+            url_for('listado', success=f"reemplazados_{resultado['total']}")
+        )
+    except ValueError as exc:
+        logger.warning("Archivo de reemplazo inválido: %s", exc)
+        return redirect(url_for('listado', error=str(exc)))
+    except Exception:
+        logger.exception("Error reemplazando registros desde Excel")
+        return redirect(url_for('listado', error='No se pudo reemplazar los registros'))
     finally:
         if ruta_temporal and os.path.exists(ruta_temporal):
             try:
