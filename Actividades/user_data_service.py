@@ -7,6 +7,8 @@ crea respaldos de las tablas de configuración y usa una transacción única.
 
 import json
 import os
+import re
+import unicodedata
 import uuid
 from datetime import datetime
 
@@ -79,6 +81,40 @@ def _insertar_usuario(cursor, usuario):
     return cursor.rowcount
 
 
+def _clave_actividad(actividad):
+    """Normaliza una actividad para comparar sin numeración ni espacios."""
+    texto = unicodedata.normalize("NFKC", str(actividad or "")).strip().casefold()
+    texto = re.sub(r"^\s*\d+\s*[.)-]\s*", "", texto)
+    return re.sub(r"\s+", " ", texto)
+
+
+def _consultar_actividades(cursor, usuario):
+    if db.DATABASE_URL:
+        cursor.execute(
+            "SELECT actividad FROM actividades_personales WHERE username = %s",
+            (str(usuario),),
+        )
+    else:
+        cursor.execute(
+            "SELECT actividad FROM actividades_personales WHERE username = ?",
+            (str(usuario),),
+        )
+    return [str(row[0] or "") for row in cursor.fetchall()]
+
+
+def _eliminar_actividad(cursor, usuario, actividad):
+    if db.DATABASE_URL:
+        cursor.execute(
+            "DELETE FROM actividades_personales WHERE username = %s AND actividad = %s",
+            (str(usuario), actividad),
+        )
+    else:
+        cursor.execute(
+            "DELETE FROM actividades_personales WHERE username = ? AND actividad = ?",
+            (str(usuario), actividad),
+        )
+
+
 def sincronizar_datos_usuarios():
     """Sincroniza el JSON de usuarios sin sobrescribir contraseñas."""
     ruta = _archivo_usuarios()
@@ -101,6 +137,7 @@ def sincronizar_datos_usuarios():
     resumen = {
         "usuarios_nuevos": 0,
         "actividades": 0,
+        "actividades_eliminadas": 0,
         "configuraciones": 0,
         "listas": 0,
     }
@@ -121,9 +158,40 @@ def sincronizar_datos_usuarios():
         for usuario, items in actividades.items():
             if not isinstance(items, list):
                 continue
+
+            existentes = _consultar_actividades(cursor, usuario)
+            grupos = {}
+            for actividad in existentes:
+                clave = _clave_actividad(actividad)
+                if not clave:
+                    continue
+                grupos.setdefault(clave, []).append(actividad)
+
+            # Conserva la versión sin numeración; si no existe, la más corta.
+            for valores in grupos.values():
+                if len(valores) < 2:
+                    continue
+                conservar = min(
+                    valores,
+                    key=lambda valor: (
+                        bool(re.match(r"^\s*\d+\s*[.)-]\s*", valor)),
+                        len(valor),
+                    ),
+                )
+                for actividad in valores:
+                    if actividad == conservar:
+                        continue
+                    _eliminar_actividad(cursor, usuario, actividad)
+                    resumen["actividades_eliminadas"] += 1
+
+            existentes = _consultar_actividades(cursor, usuario)
+            claves_existentes = {
+                _clave_actividad(actividad) for actividad in existentes
+            }
             for actividad in items:
                 actividad = str(actividad).strip()
-                if not actividad:
+                clave = _clave_actividad(actividad)
+                if not clave or clave in claves_existentes:
                     continue
                 if db.DATABASE_URL:
                     cursor.execute(
@@ -137,7 +205,9 @@ def sincronizar_datos_usuarios():
                         "(username, actividad) VALUES (?, ?)",
                         (str(usuario), actividad),
                     )
-                resumen["actividades"] += max(0, cursor.rowcount)
+                if cursor.rowcount > 0:
+                    resumen["actividades"] += 1
+                    claves_existentes.add(clave)
 
         for usuario, config_usuario in configuraciones.items():
             if not isinstance(config_usuario, dict):

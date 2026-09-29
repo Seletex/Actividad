@@ -52,6 +52,7 @@ from html_utils import (
     generar_gestion_ubicaciones, generar_gestion_tipos_solicitud,
     generar_gestion_medios_solicitud, generar_tabla_registros_recientes,
     generar_tabla_actividades_completa, generar_opciones_con_seleccion,
+    generar_gestion_actividades_personales_por_usuario,
     generar_gestion_contrasena, generar_gestion_auditoria
 )
 from templates import (
@@ -567,7 +568,8 @@ def sincronizar_usuarios():
             "SINCRONIZAR_USUARIOS",
             (
                 f"Usuarios nuevos: {resumen['usuarios_nuevos']}; "
-                f"actividades: {resumen['actividades']}; "
+                f"actividades agregadas: {resumen['actividades']}; "
+                f"actividades duplicadas eliminadas: {resumen['actividades_eliminadas']}; "
                 f"configuraciones: {resumen['configuraciones']}; "
                 f"listas: {resumen['listas']}"
             ),
@@ -782,7 +784,10 @@ def gestion():
     gestion_ubicaciones = generar_gestion_ubicaciones() if es_admin else ""
     gestion_tipos = generar_gestion_tipos_solicitud() if es_admin else ""
     gestion_medios = generar_gestion_medios_solicitud() if es_admin else ""
-    gestion_personal = generar_gestion_actividades_personales(usuario_actual) if not es_admin else ""
+    if es_admin:
+        gestion_personal = generar_gestion_actividades_personales_por_usuario()
+    else:
+        gestion_personal = generar_gestion_actividades_personales(usuario_actual)
 
     extra = generar_gestion_contrasena(usuario_actual)
     if es_admin:

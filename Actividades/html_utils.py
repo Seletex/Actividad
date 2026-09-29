@@ -309,6 +309,44 @@ def generar_gestion_actividades_personales(usuario_actual):
 
 
 @medir_tiempo
+def generar_gestion_actividades_personales_por_usuario():
+    """Muestra un resumen de actividades personales de todos los usuarios."""
+    try:
+        data = cargar_usuarios()
+        usuarios = data.get("usuarios", []) or []
+        actividades = data.get("actividades", {}) or {}
+        nombres = sorted(set(usuarios) | set(actividades))
+        contenido = """
+        <div class="mt-4">
+            <h6 class="text-uppercase text-muted fw-bold mb-3 small">✨ Actividades Personales por Usuario</h6>
+            <div class="list-group shadow-sm rounded-3">
+        """
+        for usuario in nombres:
+            items = actividades.get(usuario, []) or []
+            contenido += (
+                '<div class="list-group-item py-3">'
+                f'<div class="fw-bold text-dark mb-2">{_html.escape(str(usuario))} '
+                f'<span class="badge bg-secondary">{len(items)}</span></div>'
+            )
+            if items:
+                contenido += '<ul class="list-unstyled small mb-0">'
+                for actividad in items:
+                    contenido += (
+                        '<li class="mb-1"><i class="fas fa-circle text-info me-2" '
+                        'style="font-size:0.4rem"></i>'
+                        f'{_html.escape(str(actividad))}</li>'
+                    )
+                contenido += '</ul>'
+            else:
+                contenido += '<div class="small text-muted">Sin actividades personales</div>'
+            contenido += '</div>'
+        contenido += '</div></div>'
+        return contenido
+    except Exception:
+        return "<div class='alert alert-danger'>Error cargando actividades personales</div>"
+
+
+@medir_tiempo
 def generar_tabla_registros_recientes(df, usuario_actual):
     """Genera el HTML para la tabla de registros recientes con acciones"""
     if df.empty:
