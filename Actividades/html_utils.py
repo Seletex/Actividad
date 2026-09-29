@@ -281,12 +281,13 @@ def generar_gestion_actividades_personales(usuario_actual):
         
         if actividades_personales:
             for actividad in actividades_personales:
+                actividad_escaped = _html.escape(str(actividad), quote=True)
                 contenido += f"""
                 <div class="list-group-item d-flex justify-content-between align-items-center py-3">
-                    <div class="text-dark small"><i class="fas fa-user-tag me-2 text-info"></i>{actividad}</div>
+                    <div class="text-dark small"><i class="fas fa-user-tag me-2 text-info"></i>{actividad_escaped}</div>
                     <form action="/eliminar_actividad_personal" method="POST">
-                        <input type="hidden" name="usuario" value="{usuario_actual}">
-                        <input type="hidden" name="actividad" value="{actividad}">
+                        <input type="hidden" name="usuario" value="{_html.escape(str(usuario_actual), quote=True)}">
+                        <input type="hidden" name="actividad" value="{actividad_escaped}">
                         <button type="submit" class="btn btn-link text-danger p-0 ms-2" 
                                 onclick="return confirm('¿Eliminar actividad personal?')">
                             <i class="fas fa-times"></i>

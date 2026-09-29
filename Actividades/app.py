@@ -1121,7 +1121,7 @@ def eliminar_medio_solicitud():
 @csrf_protect
 def agregar_act_personal():
     usuario = session.get('usuario')
-    actividad = sanitizar(request.form.get('nueva_actividad'), 200)
+    actividad = sanitizar(request.form.get('nueva_actividad'), 2000)
     if actividad:
         agregar_actividad_personal(usuario, actividad)
         return redirect(url_for('gestion', msg='Actividad personal agregada'))
@@ -1133,7 +1133,7 @@ def agregar_act_personal():
 @csrf_protect
 def eliminar_act_personal():
     usuario = session.get('usuario')
-    actividad = sanitizar(request.form.get('actividad'), 200)
+    actividad = sanitizar(request.form.get('actividad'), 2000)
     if actividad:
         eliminar_actividad_personal(usuario, actividad)
         return redirect(url_for('gestion', msg='Actividad personal eliminada'))

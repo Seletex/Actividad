@@ -5,6 +5,7 @@ La sincronización no modifica las contraseñas existentes. Antes de escribir
 crea respaldos de las tablas de configuración y usa una transacción única.
 """
 
+import difflib
 import json
 import os
 import re
@@ -89,6 +90,24 @@ def _clave_actividad(actividad):
     return re.sub(r"\s+", " ", texto)
 
 
+def _tiene_numeracion(actividad):
+    return bool(re.match(r"^\s*\d+\s*[.)-]\s*", str(actividad or "")))
+
+
+def _actividades_similares(primera, segunda):
+    return difflib.SequenceMatcher(
+        None, _clave_actividad(primera), _clave_actividad(segunda)
+    ).ratio() >= 0.95
+
+
+def _mejor_actividad(primera, segunda):
+    """Prefiere la versión sin numeración y, en empate, la más corta."""
+    return min(
+        (primera, segunda),
+        key=lambda valor: (_tiene_numeracion(valor), len(str(valor or ""))),
+    )
+
+
 def _consultar_actividades(cursor, usuario):
     if db.DATABASE_URL:
         cursor.execute(
@@ -161,38 +180,36 @@ def sincronizar_datos_usuarios(ruta_seleccionada=None):
                 continue
 
             existentes = _consultar_actividades(cursor, usuario)
-            grupos = {}
+            conservadas = []
             for actividad in existentes:
-                clave = _clave_actividad(actividad)
-                if not clave:
+                if not _clave_actividad(actividad):
                     continue
-                grupos.setdefault(clave, []).append(actividad)
-
-            # Conserva la versión sin numeración; si no existe, la más corta.
-            for valores in grupos.values():
-                if len(valores) < 2:
-                    continue
-                conservar = min(
-                    valores,
-                    key=lambda valor: (
-                        bool(re.match(r"^\s*\d+\s*[.)-]\s*", valor)),
-                        len(valor),
+                indice = next(
+                    (
+                        i
+                        for i, conservada in enumerate(conservadas)
+                        if _actividades_similares(actividad, conservada)
                     ),
+                    None,
                 )
-                for actividad in valores:
-                    if actividad == conservar:
-                        continue
-                    _eliminar_actividad(cursor, usuario, actividad)
-                    resumen["actividades_eliminadas"] += 1
+                if indice is None:
+                    conservadas.append(actividad)
+                    continue
 
-            existentes = _consultar_actividades(cursor, usuario)
-            claves_existentes = {
-                _clave_actividad(actividad) for actividad in existentes
-            }
+                ganador = _mejor_actividad(conservadas[indice], actividad)
+                perdedor = actividad if ganador == conservadas[indice] else conservadas[indice]
+                _eliminar_actividad(cursor, usuario, perdedor)
+                resumen["actividades_eliminadas"] += 1
+                conservadas[indice] = ganador
+
             for actividad in items:
                 actividad = str(actividad).strip()
-                clave = _clave_actividad(actividad)
-                if not clave or clave in claves_existentes:
+                if not _clave_actividad(actividad):
+                    continue
+                if any(
+                    _actividades_similares(actividad, conservada)
+                    for conservada in conservadas
+                ):
                     continue
                 if db.DATABASE_URL:
                     cursor.execute(
@@ -208,7 +225,7 @@ def sincronizar_datos_usuarios(ruta_seleccionada=None):
                     )
                 if cursor.rowcount > 0:
                     resumen["actividades"] += 1
-                    claves_existentes.add(clave)
+                    conservadas.append(actividad)
 
         for usuario, config_usuario in configuraciones.items():
             if not isinstance(config_usuario, dict):
