@@ -307,10 +307,12 @@ def _html_importacion(usuario_actual):
         <div class="card-body">
             <p class="small mb-3">
                 Carga usuarios, actividades personales y datos de contrato desde
-                <code>usuarios.json</code>. Las contraseñas existentes no se modifican.
+                <code>usuarios.json</code>. Puedes seleccionar un JSON migrado más completo.
+                Las contraseñas existentes no se modifican.
             </p>
-            <form method="POST" action="/sincronizar_usuarios">
+            <form method="POST" action="/sincronizar_usuarios" enctype="multipart/form-data">
                 <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <input type="file" name="archivo" class="form-control mb-2" accept=".json">
                 <button type="submit" class="btn btn-info">
                     <i class="fas fa-sync-alt"></i> Sincronizar datos de usuarios
                 </button>
@@ -560,8 +562,17 @@ def reemplazar_registros():
 @csrf_protect
 def sincronizar_usuarios():
     """Sincroniza usuarios y configuraciones desde usuarios.json."""
+    ruta_temporal = None
     try:
-        resultado = sincronizar_datos_usuarios()
+        archivo = request.files.get('archivo')
+        if archivo and archivo.filename:
+            if not archivo.filename.lower().endswith('.json'):
+                return redirect(url_for('gestion', error='El archivo debe ser un JSON .json'))
+            descriptor, ruta_temporal = tempfile.mkstemp(suffix='.json')
+            os.close(descriptor)
+            archivo.save(ruta_temporal)
+
+        resultado = sincronizar_datos_usuarios(ruta_temporal)
         resumen = resultado["resumen"]
         registrar_auditoria(
             session.get('usuario'),
@@ -579,9 +590,18 @@ def sincronizar_usuarios():
     except FileNotFoundError:
         logger.exception("No se encontró usuarios.json")
         return redirect(url_for('gestion', error='No se encontró usuarios.json en el servidor'))
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("JSON de usuarios inválido: %s", exc)
+        return redirect(url_for('gestion', error='El archivo JSON de usuarios no es válido'))
     except Exception:
         logger.exception("Error sincronizando datos de usuarios")
         return redirect(url_for('gestion', error='No se pudieron sincronizar los usuarios'))
+    finally:
+        if ruta_temporal and os.path.exists(ruta_temporal):
+            try:
+                os.remove(ruta_temporal)
+            except Exception:
+                pass
 
 
 @app.route('/agregar_registro', methods=['POST'])

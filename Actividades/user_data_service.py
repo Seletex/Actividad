@@ -25,9 +25,10 @@ _TABLAS_RESPALDO = [
 ]
 
 
-def _archivo_usuarios():
-    """Obtiene el JSON de usuarios incluido en el despliegue."""
+def _archivo_usuarios(ruta_seleccionada=None):
+    """Obtiene el JSON de usuarios incluido o el seleccionado por el admin."""
     candidatos = [
+        ruta_seleccionada,
         config.USERS_FILE,
         os.path.join(config.DATA_DIR, "usuarios.json"),
         os.path.join(config.BASE_DIR, "usuarios.json"),
@@ -115,9 +116,9 @@ def _eliminar_actividad(cursor, usuario, actividad):
         )
 
 
-def sincronizar_datos_usuarios():
+def sincronizar_datos_usuarios(ruta_seleccionada=None):
     """Sincroniza el JSON de usuarios sin sobrescribir contraseñas."""
-    ruta = _archivo_usuarios()
+    ruta = _archivo_usuarios(ruta_seleccionada)
     with open(ruta, "r", encoding="utf-8") as archivo:
         datos = json.load(archivo)
 
