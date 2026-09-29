@@ -36,6 +36,7 @@ from web_security import (
     sanitizar, configurar_cookies, seguridad_headers
 )
 from activity_service import agregar_actividad_personal, eliminar_actividad_personal
+from admin_bootstrap import aplicar_password_admin_inicial
 from export_service import (
     exportar_registros_filtrados, obtener_estadisticas_exportacion,
     generar_informe_template
@@ -961,6 +962,7 @@ def initialize_app():
             inicializar_usuarios()
             inicializar_config()
             inicializar_excel()
+            aplicar_password_admin_inicial()
         logger.info("Aplicación inicializada correctamente (Usuarios, Config, Excel)")
     except Exception:
         logger.exception("Error durante la inicialización")
