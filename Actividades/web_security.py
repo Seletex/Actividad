@@ -5,6 +5,7 @@ sanitización de entradas y sesiones reforzadas.
 Este módulo solo se usa en app.py (web), no en la app de escritorio.
 """
 
+import os
 import re
 import time
 import secrets
@@ -140,15 +141,22 @@ def configurar_cookies(app):
     """Refuerza el manejo de cookies de sesión."""
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-    app.config['SESSION_COOKIE_SECURE'] = os_environ_truthy('SESSION_COOKIE_SECURE')
+    # En Render el tráfico siempre es HTTPS, así que la cookie debe ir marcada
+    # como Secure aunque la variable de entorno no se haya configurado.
+    _default_secure = 'true' if os.environ.get('RENDER') else 'false'
+    app.config['SESSION_COOKIE_SECURE'] = os_environ_truthy(
+        'SESSION_COOKIE_SECURE', default=_default_secure)
     app.config['PERMANENT_SESSION_LIFETIME'] = 12 * 60 * 60  # 12 horas
     app.config['SESSION_REFRESH_EACH_REQUEST'] = True
 
 
-def os_environ_truthy(key):
+def os_environ_truthy(key, default='false'):
+    """Lee una variable de entorno como booleano. Usa `default` si no existe."""
     try:
-        import os
-        return os.environ.get(key, '').lower() in ('1', 'true', 'yes', 'on')
+        valor = os.environ.get(key)
+        if valor is None or valor == '':
+            valor = default
+        return str(valor).lower() in ('1', 'true', 'yes', 'on')
     except Exception:
         return False
 
@@ -178,6 +186,11 @@ def seguridad_headers(resp):
         "upgrade-insecure-requests"
     )
     resp.headers.setdefault('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+    # HSTS: solo sobre HTTPS (en Render el tráfico público siempre lo es).
+    if request.is_secure or (request.headers.get('X-Forwarded-Proto', '').split(',')[0].strip() == 'https'):
+        resp.headers.setdefault(
+            'Strict-Transport-Security',
+            'max-age=31536000; includeSubDomains')
     # Cache-Control modesto para páginas autenticadas
     if request.path and not request.path.endswith(('.js', '.css', '.png', '.jpg', '.ico')):
         resp.headers.setdefault('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
