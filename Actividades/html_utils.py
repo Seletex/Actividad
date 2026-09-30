@@ -353,8 +353,13 @@ def generar_tabla_registros_recientes(df, usuario_actual):
     if df.empty:
         return '<tr><td colspan="7" class="text-center text-muted">No hay registros recientes</td></tr>'
     
-    # Tomar los últimos 10
-    df_recientes = df.tail(10).iloc[::-1]
+    # Mostrar los 10 registros más recientes por fecha, no por orden de SQL.
+    try:
+        df_recientes = df.sort_values(
+            by='FECHA', ascending=False, na_position='last'
+        ).head(10)
+    except Exception:
+        df_recientes = df.head(10)
     
     html = ""
     for _, row in df_recientes.iterrows():

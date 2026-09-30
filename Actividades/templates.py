@@ -261,7 +261,12 @@ MAIN_TEMPLATE = """
                     
                     <hr class="my-5">
                     
-                    <h3 class="mb-3"><i class="fas fa-history"></i> Registros Recientes</h3>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h3 class="mb-0"><i class="fas fa-history"></i> Registros Recientes</h3>
+                        <a href="/" class="btn btn-outline-secondary btn-sm">
+                            <i class="fas fa-sync-alt"></i> Actualizar
+                        </a>
+                    </div>
                     <div class="table-responsive">
                         <table class="table table-hover align-middle">
                             <thead class="table-light">
