@@ -53,10 +53,24 @@ def csrf_protect(f):
 # Ventana en segundos y máximo de intentos por dirección IP
 _RATE_LIMIT_WINDOW = 15 * 60
 _RATE_LIMIT_MAX = 10
+_MAX_IP_BUCKETS = 10_000
 
 # Almacenamiento en memoria: ip -> deque de timestamps
 _login_attempts = defaultdict(deque)
 _rate_lock = threading.Lock()
+
+
+def _purgar_buckets():
+    """Evita que IPs falsificadas consuman memoria de forma ilimitada."""
+    if len(_login_attempts) <= _MAX_IP_BUCKETS:
+        return
+    entradas = sorted(
+        _login_attempts.items(),
+        key=lambda item: item[1][-1] if item[1] else 0,
+    )
+    cantidad = len(entradas) - _MAX_IP_BUCKETS
+    for ip, _ in entradas[:cantidad]:
+        _login_attempts.pop(ip, None)
 
 
 def _limpiar_esquemas(deque_obj):
@@ -70,6 +84,7 @@ def login_bloqueado(ip):
     if not ip:
         return False
     with _rate_lock:
+        _purgar_buckets()
         dq = _login_attempts[ip]
         _limpiar_esquemas(dq)
         return len(dq) >= _RATE_LIMIT_MAX
@@ -80,6 +95,7 @@ def registrar_intento_fallido(ip):
     if not ip:
         return
     with _rate_lock:
+        _purgar_buckets()
         dq = _login_attempts[ip]
         _limpiar_esquemas(dq)
         dq.append(time.time())
@@ -154,7 +170,12 @@ def seguridad_headers(resp):
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
         "img-src 'self' data:; "
         "font-src 'self' https://cdnjs.cloudflare.com data:; "
-        "connect-src 'self'"
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'; "
+        "upgrade-insecure-requests"
     )
     resp.headers.setdefault('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
     # Cache-Control modesto para páginas autenticadas

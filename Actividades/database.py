@@ -97,10 +97,94 @@ def db_session():
         conn.close()
 
 def fix_query(query):
-    """Adapta la sintaxis de la consulta de SQLite (?) a Postgres (%s)"""
-    if DATABASE_URL and psycopg2:
-        return query.replace('?', '%s').replace('INSERT OR IGNORE', 'INSERT').replace('AUTOINCREMENT', '')
-    return query
+    """Adapta placeholders SQLite a PostgreSQL sin tocar literales SQL.
+
+    Solo convierte ``?`` fuera de comillas y comentarios. Los valores siguen
+    siendo enviados como parámetros; nunca se concatena entrada de usuario.
+    """
+    if not (DATABASE_URL and psycopg2):
+        return query
+
+    salida = []
+    i = 0
+    en_comilla_simple = False
+    en_comilla_doble = False
+    en_comentario_linea = False
+    en_comentario_bloque = False
+    longitud = len(query)
+
+    while i < longitud:
+        char = query[i]
+        siguiente = query[i + 1] if i + 1 < longitud else ""
+
+        if en_comentario_linea:
+            salida.append(char)
+            if char in "\r\n":
+                en_comentario_linea = False
+            i += 1
+            continue
+
+        if en_comentario_bloque:
+            salida.append(char)
+            if char == "*" and siguiente == "/":
+                salida.append(siguiente)
+                i += 2
+                en_comentario_bloque = False
+                continue
+            i += 1
+            continue
+
+        if en_comilla_simple:
+            salida.append(char)
+            if char == "'" and siguiente == "'":
+                salida.append(siguiente)
+                i += 2
+                continue
+            if char == "'":
+                en_comilla_simple = False
+            i += 1
+            continue
+
+        if en_comilla_doble:
+            salida.append(char)
+            if char == '"' and siguiente == '"':
+                salida.append(siguiente)
+                i += 2
+                continue
+            if char == '"':
+                en_comilla_doble = False
+            i += 1
+            continue
+
+        if char == "-" and siguiente == "-":
+            salida.extend((char, siguiente))
+            en_comentario_linea = True
+            i += 2
+            continue
+        if char == "/" and siguiente == "*":
+            salida.extend((char, siguiente))
+            en_comentario_bloque = True
+            i += 2
+            continue
+        if char == "'":
+            salida.append(char)
+            en_comilla_simple = True
+            i += 1
+            continue
+        if char == '"':
+            salida.append(char)
+            en_comilla_doble = True
+            i += 1
+            continue
+        if char == "?":
+            salida.append("%s")
+            i += 1
+            continue
+
+        salida.append(char)
+        i += 1
+
+    return "".join(salida).replace("INSERT OR IGNORE", "INSERT").replace("AUTOINCREMENT", "")
 
 @retry_operation(max_retries=5, base_delay=1.0)
 def inicializar_tablas():
@@ -1193,6 +1277,8 @@ def sincronizar_red_a_local():
     2. Copia la BD y Excel desde la red (MASTER_DIR) al directorio local.
     Se ejecuta al iniciar la aplicación.
     """
+    if os.environ.get("ACTIVIDADES_SKIP_OFFLINE_SYNC") == "1":
+        return False
     if DATABASE_URL or not MASTER_DIR or not os.path.exists(MASTER_DIR):
         return False
     

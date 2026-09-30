@@ -15,6 +15,7 @@ Arquitectura:
 """
 
 import os
+import sys
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -84,7 +85,11 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    import sys
+    if os.environ.get("ALLOW_LEGACY_LAN_SERVER") != "1":
+        print("Servidor LAN heredado deshabilitado por seguridad.")
+        print("Use la aplicación Flask: python Actividades/app.py")
+        sys.exit(1)
+
     try:
         print("Iniciando componentes del sistema...")
         inicializar_usuarios()

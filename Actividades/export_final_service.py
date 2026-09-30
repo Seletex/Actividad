@@ -6,6 +6,7 @@ from datetime import datetime
 from config import TEMPLATE_INFORME_FINAL, logger
 import unicodedata
 from utils import medir_tiempo
+from export_service import _neutralizar_formula
 
 @medir_tiempo
 def generar_informe_final_resumen(df, output_path, contrato_data=None, usuario=None):
@@ -68,7 +69,7 @@ def generar_informe_final_resumen(df, output_path, contrato_data=None, usuario=N
 
         def _build_contrato_values(df, contrato_data, usuario=None):
             vals = {}
-            n_ = lambda x: (contrato_data.get(x) or '').upper() if contrato_data else ''
+            n_ = lambda x: _neutralizar_formula((contrato_data.get(x) or '').upper()) if contrato_data else ''
             vals['NRO_CONTRATO'] = n_('nro')
             vals['OBJETO'] = n_('objeto')
             vals['NOMBRE_CONTRATISTA'] = n_('nombre') or (usuario.upper() if usuario else '')
@@ -183,7 +184,7 @@ def generar_informe_final_resumen(df, output_path, contrato_data=None, usuario=N
         # 6. Escribir Datos y Replicar Estructura EXACTA
         current_row = 8
         for _, r in resumen.iterrows():
-            ws.cell(row=current_row, column=1, value=r['Actividad'])
+            ws.cell(row=current_row, column=1, value=_neutralizar_formula(r['Actividad']))
             ws.cell(row=current_row, column=8, value=r['Cantidad'])
             for min_c, max_c in row7_merges:
                 if min_c != max_c:

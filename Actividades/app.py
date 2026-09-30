@@ -8,6 +8,7 @@ protección CSRF, rate limiting y bitácora de auditoría.
 Despliegue: gunicorn app:app (ver render.yaml / Procfile)
 """
 from flask import Flask, request, redirect, url_for, session, render_template_string, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import json
 import html
@@ -43,7 +44,7 @@ from user_data_service import sincronizar_datos_usuarios
 from backup_service import crear_respaldo_completo
 from export_service import (
     exportar_registros_filtrados, obtener_estadisticas_exportacion,
-    generar_informe_template
+    generar_informe_template, preparar_dataframe_exportable
 )
 from html_utils import (
     generar_opciones_actividades, generar_opciones_ubicaciones,
@@ -63,14 +64,29 @@ from templates import (
 )
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+_secret_key = os.environ.get("FLASK_SECRET_KEY")
+if not _secret_key and os.environ.get("DATABASE_URL"):
+    raise RuntimeError("FLASK_SECRET_KEY es obligatoria cuando DATABASE_URL está configurada")
+app.config['SECRET_KEY'] = _secret_key or secrets.token_hex(32)
 configurar_cookies(app)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+if os.environ.get("TRUST_PROXY", "true" if os.environ.get("DATABASE_URL") else "false").lower() in ("1", "true", "yes", "on"):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 
 def _ip_cliente():
     return (request.headers.get('X-Forwarded-For', request.remote_addr or '')
             .split(',')[0].strip())
+
+
+def _json_para_html(valor):
+    """Serializa JSON para insertarlo dentro de un bloque <script>."""
+    return (
+        json.dumps(valor, ensure_ascii=False)
+        .replace("&", r"\u0026")
+        .replace("<", r"\u003c")
+        .replace(">", r"\u003e")
+    )
 
 
 def _inyectar_csrf(html_page):
@@ -330,9 +346,12 @@ def _html_importacion(usuario_actual):
                 Genera un ZIP con registros, usuarios, actividades personales,
                 configuraciones y listas globales. No incluye contraseñas.
             </p>
-            <a href="/descargar_respaldo" class="btn btn-success">
-                <i class="fas fa-file-archive"></i> Descargar respaldo ZIP
-            </a>
+            <form method="POST" action="/descargar_respaldo">
+                <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
+                <button type="submit" class="btn btn-success">
+                    <i class="fas fa-file-archive"></i> Descargar respaldo ZIP
+                </button>
+            </form>
         </div>
     </div>
     """
@@ -620,9 +639,10 @@ def sincronizar_usuarios():
                 pass
 
 
-@app.route('/descargar_respaldo', methods=['GET'])
+@app.route('/descargar_respaldo', methods=['POST'])
 @login_required
 @admin_required
+@csrf_protect
 @cambio_requerido
 def descargar_respaldo():
     """Descarga un ZIP con los datos operativos de la aplicación."""
@@ -777,7 +797,7 @@ def cambiar_contrasena():
         return _inyectar_csrf(page)
 
     # POST: procesar el cambio
-    forzado = session.get('debe_cambiar') or request.form.get('forzado') == '1'
+    forzado = bool(session.get('debe_cambiar'))
 
     nueva = request.form.get('nueva_contrasena', '')
     confirmar = request.form.get('confirmar_contrasena', '')
@@ -1206,6 +1226,7 @@ def eliminar_registro_route():
 
 @app.route('/estadisticas')
 @login_required
+@cambio_requerido
 def estadisticas():
     usuario_actual = session.get('usuario')
     fecha_inicio = request.args.get('fecha_inicio', '').strip() or None
@@ -1260,9 +1281,9 @@ def estadisticas():
         fecha_min=fecha_inicio if fecha_inicio else fecha_min,
         fecha_max=fecha_fin if fecha_fin else stats.get('fecha_max', 'N/A'),
         promedio_diario=promedio,
-        data_actividades=json.dumps(stats.get('chart_actividades', {'labels': [], 'data': []})),
-        data_cumplimiento=json.dumps(stats.get('chart_cumplimiento', {'labels': [], 'data': []})),
-        data_linea=json.dumps(stats.get('chart_linea', {'labels': [], 'data': []})),
+        data_actividades=_json_para_html(stats.get('chart_actividades', {'labels': [], 'data': []})),
+        data_cumplimiento=_json_para_html(stats.get('chart_cumplimiento', {'labels': [], 'data': []})),
+        data_linea=_json_para_html(stats.get('chart_linea', {'labels': [], 'data': []})),
         tabla_usuarios_stats=tabla_stats,
         tabla_actividades_stats=actividad_stats_html,
         val_fecha_inicio=fecha_inicio or "",
@@ -1277,6 +1298,7 @@ def estadisticas():
 
 @app.route('/exportar', methods=['GET', 'POST'])
 @login_required
+@cambio_requerido
 def exportar():
     usuario_actual = session.get('usuario')
 
@@ -1390,7 +1412,9 @@ def exportar():
             filename = f"Informe_{tipo_reporte}_{usuario_actual}_{datetime.now().strftime('%Y%m%d')}.xlsx"
             mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         else:
-            df.to_csv(tmp_path, index=False, encoding='utf-8-sig')
+            preparar_dataframe_exportable(df).to_csv(
+                tmp_path, index=False, encoding='utf-8-sig'
+            )
             filename = f"exportacion_{usuario_actual}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             mimetype = 'text/csv; charset=utf-8-sig'
 

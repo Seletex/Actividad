@@ -5,10 +5,10 @@ Solo genera fragmentos HTML, no páginas completas.
 
 import html as _html
 from database import (
-    cargar_actividades, cargar_actividades_globales, cargar_ubicaciones, 
+    cargar_actividades, cargar_actividades_globales, cargar_ubicaciones,
     cargar_tipos_solicitud, cargar_medios_solicitud, cargar_usuarios,
     usuario_tiene_contrasena, obtener_bitacora
-) 
+)
 from activity_service import obtener_actividades_personales
 from utils import medir_tiempo
 
@@ -17,21 +17,25 @@ from utils import medir_tiempo
 # =============================================================================
 
 def _generar_opciones(items, truncar=False, max_len=80):
-    """Helper genérico para generar <option> HTML"""
+    """Helper genérico para generar <option> HTML escapando el contenido."""
     opciones = ""
     for item in items:
-        display = item if not truncar or len(item) <= max_len else item[:max_len-3] + "..."
-        opciones += f'<option value="{item}" title="{item}">{display}</option>\n'
+        value = _html.escape(str(item or ""), quote=True)
+        texto = str(item or "")
+        display = texto if not truncar or len(texto) <= max_len else texto[:max_len-3] + "..."
+        opciones += f'<option value="{value}" title="{value}">{_html.escape(display)}</option>\n'
     return opciones
 
 @medir_tiempo
 def generar_opciones_con_seleccion(items, seleccionado, truncar=False, max_len=80):
-    """Genera opciones para un select con un valor pre-seleccionado"""
+    """Genera opciones para un select con un valor pre-seleccionado."""
     opciones = ""
     for item in items:
-        display = item if not truncar or len(item) <= max_len else item[:max_len-3] + "..."
+        value = _html.escape(str(item or ""), quote=True)
+        texto = str(item or "")
+        display = texto if not truncar or len(texto) <= max_len else texto[:max_len-3] + "..."
         selected = 'selected' if str(item) == str(seleccionado) else ''
-        opciones += f'<option value="{item}" title="{item}" {selected}>{display}</option>\n'
+        opciones += f'<option value="{value}" title="{value}" {selected}>{_html.escape(display)}</option>\n'
     return opciones
 
 @medir_tiempo
@@ -122,7 +126,7 @@ def _generar_gestion_lista_simple(titulo, item_label, items, action_add, action_
         </h6>
         <form action="{action_add}" method="POST" class="row g-2 mb-4">
             <div class="col-md-9">
-                <input type="text" name="nuevo_item" 
+                <input type="text" name="nuevo_item"
                        placeholder="Añadir {item_label}..." class="form-control" required>
             </div>
             <div class="col-md-3">
@@ -133,15 +137,16 @@ def _generar_gestion_lista_simple(titulo, item_label, items, action_add, action_
         </form>
         <div class="list-group list-group-flush border-top">
     """
-    
+
     if items:
         for item in items:
+            valor = _html.escape(str(item or ""), quote=True)
             contenido += f"""
             <div class="list-group-item d-flex justify-content-between align-items-center py-3 px-2 border-bottom">
-                <div class="text-dark small"><i class="fas fa-chevron-right me-3 text-muted opacity-50"></i>{item}</div>
+                <div class="text-dark small"><i class="fas fa-chevron-right me-3 text-muted opacity-50"></i>{_html.escape(str(item or ""))}</div>
                 <form action="{action_del}" method="POST" class="ms-2">
-                    <input type="hidden" name="{field_name}" value="{item}">
-                    <button type="submit" class="btn btn-outline-danger btn-sm border-0" 
+                    <input type="hidden" name="{field_name}" value="{valor}">
+                    <button type="submit" class="btn btn-outline-danger btn-sm border-0"
                             onclick="return confirm('¿Eliminar esta {item_label}?')">
                         <i class="fas fa-trash-alt"></i>
                     </button>
@@ -154,7 +159,7 @@ def _generar_gestion_lista_simple(titulo, item_label, items, action_add, action_
                 No hay {item_label} configuradas
             </div>
         """
-    
+
     contenido += "</div></div>"
     return contenido
 
@@ -165,7 +170,7 @@ def generar_gestion_usuarios(usuario_actual):
     data_usuarios = cargar_usuarios()
     usuarios = data_usuarios.get("usuarios", [])
     estado_claves = data_usuarios.get("estado_claves", {})
-    
+
     if usuario_actual != "admin":
         return """
         <div class='text-center py-5'>
@@ -173,14 +178,14 @@ def generar_gestion_usuarios(usuario_actual):
             <p class='text-muted'>Solo administradores pueden gestionar usuarios.</p>
         </div>
         """
-    
+
     contenido = """
     <div class="mb-4">
         <h6 class="text-uppercase text-muted fw-bold mb-3 small">➕ Registro de Usuarios</h6>
         <form action="/agregar_usuario" method="POST" class="mb-4">
             <div class="input-group">
                 <span class="input-group-text bg-white border-end-0"><i class="fas fa-user text-muted"></i></span>
-                <input type="text" name="nuevo_usuario" class="form-control border-start-0" 
+                <input type="text" name="nuevo_usuario" class="form-control border-start-0"
                        placeholder="Ej: nombre.apellido" required>
                 <button type="submit" class="btn btn-success">Añadir</button>
             </div>
@@ -188,9 +193,10 @@ def generar_gestion_usuarios(usuario_actual):
         <h6 class="text-uppercase text-muted fw-bold mb-3 small">👥 Usuarios Registrados</h6>
         <div class="list-group shadow-sm">
     """
-    
+
     for usuario in usuarios:
         is_admin = usuario == "admin"
+        usuario_escaped = _html.escape(str(usuario), quote=True)
         badge = '<span class="badge bg-warning text-dark small">Administrador</span>' if is_admin else '<span class="text-muted small">Usuario Estándar</span>'
 
         # Estado de contraseña
@@ -208,9 +214,9 @@ def generar_gestion_usuarios(usuario_actual):
 
         delete_btn = "" if is_admin else f'''
             <form action="/eliminar_usuario" method="POST">
-                <input type="hidden" name="usuario" value="{usuario}">
-                <button type="submit" class="btn btn-outline-danger btn-sm border-0" 
-                        onclick="return confirm('¿Eliminar al usuario {usuario}?')">
+                <input type="hidden" name="usuario" value="{usuario_escaped}">
+                <button type="submit" class="btn btn-outline-danger btn-sm border-0"
+                        onclick="return confirm('¿Eliminar este usuario?')">
                     <i class="fas fa-user-minus"></i>
                 </button>
             </form>
@@ -219,8 +225,8 @@ def generar_gestion_usuarios(usuario_actual):
         # Formulario de asignación de contraseña (para todos, incluido admin)
         clave_form = f"""
         <form action="/asignar_contrasena" method="POST" class="d-flex align-items-center gap-1 mt-1">
-            <input type="hidden" name="usuario" value="{usuario}">
-            <input type="password" name="nueva_contrasena" class="form-control form-control-sm" 
+            <input type="hidden" name="usuario" value="{usuario_escaped}">
+            <input type="password" name="nueva_contrasena" class="form-control form-control-sm"
                    style="max-width:150px" placeholder="Nueva clave" minlength="6" required autocomplete="new-password">
             <label class="small text-muted mb-0 ms-1 text-nowrap">
                 <input type="checkbox" name="forzar_cambio" value="1" class="me-1">Forzar
@@ -239,7 +245,7 @@ def generar_gestion_usuarios(usuario_actual):
                         <i class="fas fa-user-circle text-primary"></i>
                     </div>
                     <div>
-                        <div class="fw-bold text-dark">{usuario}</div>
+                        <div class="fw-bold text-dark">{_html.escape(str(usuario))}</div>
                         {badge}
                         <div class="mt-1">{estado_clave_html}</div>
                     </div>
@@ -249,7 +255,7 @@ def generar_gestion_usuarios(usuario_actual):
             <div class="mt-2">{clave_form}</div>
         </div>
         """
-    
+
     contenido += "</div></div>"
     return contenido
 
@@ -259,17 +265,17 @@ def generar_gestion_actividades_personales(usuario_actual):
     """Genera HTML para gestión de actividades personales"""
     if not usuario_actual:
         return ""
-    
+
     try:
         actividades_personales = obtener_actividades_personales(usuario_actual)
-        
+
         contenido = f"""
         <div class="mb-4">
             <h6 class="text-uppercase text-muted fw-bold mb-3 small">✨ Mis Actividades Propias</h6>
             <form action="/agregar_actividad_personal" method="POST" class="row g-2 mb-4">
-                <input type="hidden" name="usuario" value="{usuario_actual}">
+                <input type="hidden" name="usuario" value="{_html.escape(str(usuario_actual), quote=True)}">
                 <div class="col-md-9">
-                    <input type="text" name="nueva_actividad" 
+                    <input type="text" name="nueva_actividad"
                            placeholder="Agrega algo específico de tu cargo..." class="form-control" required>
                 </div>
                 <div class="col-md-3">
@@ -278,7 +284,7 @@ def generar_gestion_actividades_personales(usuario_actual):
             </form>
             <div class="list-group shadow-sm rounded-3">
         """
-        
+
         if actividades_personales:
             for actividad in actividades_personales:
                 actividad_escaped = _html.escape(str(actividad), quote=True)
@@ -288,7 +294,7 @@ def generar_gestion_actividades_personales(usuario_actual):
                     <form action="/eliminar_actividad_personal" method="POST">
                         <input type="hidden" name="usuario" value="{_html.escape(str(usuario_actual), quote=True)}">
                         <input type="hidden" name="actividad" value="{actividad_escaped}">
-                        <button type="submit" class="btn btn-link text-danger p-0 ms-2" 
+                        <button type="submit" class="btn btn-link text-danger p-0 ms-2"
                                 onclick="return confirm('¿Eliminar actividad personal?')">
                             <i class="fas fa-times"></i>
                         </button>
@@ -297,12 +303,12 @@ def generar_gestion_actividades_personales(usuario_actual):
                 """
         else:
             contenido += """
-                <div class="list-group-item text-center text-muted py-4 border-dashed" 
+                <div class="list-group-item text-center text-muted py-4 border-dashed"
                      style="border: 2px dashed #e2e8f0; background: #f8fafc;">
                     No tienes actividades personales.
                 </div>
             """
-        
+
         contenido += "</div></div>"
         return contenido
     except Exception as e:
@@ -352,7 +358,7 @@ def generar_tabla_registros_recientes(df, usuario_actual):
     """Genera el HTML para la tabla de registros recientes con acciones"""
     if df.empty:
         return '<tr><td colspan="7" class="text-center text-muted">No hay registros recientes</td></tr>'
-    
+
     # Mostrar los 10 registros más recientes por fecha, no por orden de SQL.
     try:
         df_recientes = df.sort_values(
@@ -360,32 +366,39 @@ def generar_tabla_registros_recientes(df, usuario_actual):
         ).head(10)
     except Exception:
         df_recientes = df.head(10)
-    
+
     html = ""
     for _, row in df_recientes.iterrows():
         id_reg = row.get('ID', '')
         es_propietario = (row.get('USUARIO') == usuario_actual) or (usuario_actual == "admin")
-        
+
         acciones = ""
         if es_propietario:
+            id_escaped_accion = _html.escape(str(id_reg), quote=True)
             acciones = f"""
                 <form action="/eliminar_registro_accion" method="POST" style="display:inline;" onsubmit="return confirm('¿Eliminar este registro?')">
-                    <input type="hidden" name="id_registro" value="{id_reg}">
+                    <input type="hidden" name="id_registro" value="{id_escaped_accion}">
                     <button type="submit" class="btn btn-sm btn-outline-danger border-0">
                         <i class="fas fa-trash-alt"></i>
                     </button>
                 </form>
             """
-        
+
+        fecha = _html.escape(str(row.get('FECHA', ''))[:10])
+        actividad = _html.escape(str(row.get('TIPO DE ACTIVIDAD', '')))
+        dependencia = _html.escape(str(row.get('DEPENDENCIA', '')))
+        tipo_solicitud = _html.escape(str(row.get('TIPO DE SOLICITUD', '')))
+        cumplido = _html.escape(str(row.get('CUMPLIDO', '')))
+        id_escaped = _html.escape(str(id_reg), quote=True)
         html += f"""
         <tr>
-            <td>{str(row.get('FECHA', ''))[:10]}</td>
-            <td title="{row.get('TIPO DE ACTIVIDAD', '')}">{str(row.get('TIPO DE ACTIVIDAD', ''))[:40]}...</td>
-            <td>{row.get('DEPENDENCIA', '')}</td>
-            <td>{row.get('TIPO DE SOLICITUD', '')}</td>
-            <td>{row.get('CUMPLIDO', '')}</td>
+            <td>{fecha}</td>
+            <td title="{actividad}">{actividad[:40]}...</td>
+            <td>{dependencia}</td>
+            <td>{tipo_solicitud}</td>
+            <td>{cumplido}</td>
             <td class="text-end">
-                <a href="/editar_registro?id_registro={id_reg}" class="btn btn-sm btn-outline-primary border-0">
+                <a href="/editar_registro?id_registro={id_escaped}" class="btn btn-sm btn-outline-primary border-0">
                     <i class="fas fa-edit"></i>
                 </a>
                 {acciones}
@@ -399,47 +412,52 @@ def generar_tabla_actividades_completa(df, usuario_actual):
     """Genera el HTML para la tabla completa de registros con acciones y estados visuales"""
     if df.empty:
         return '<tr><td colspan="6" class="text-center text-muted py-5">No se encontraron actividades con los filtros seleccionados</td></tr>'
-    
+
     # Ordenar por fecha descendente
     try:
         df_sorted = df.sort_values(by='FECHA', ascending=False)
     except:
         df_sorted = df
-        
+
     html = ""
     for _, row in df_sorted.iterrows():
         id_reg = row.get('ID', '')
         es_propietario = (row.get('USUARIO') == usuario_actual) or (usuario_actual == "admin")
-        
+
         # Badge de estado
-        cumplido = row.get('CUMPLIDO', 'No')
-        status_class = "bg-cumplido" if cumplido == 'Sí' else "bg-pendiente"
+        cumplido = _html.escape(str(row.get('CUMPLIDO', 'No') or 'No'))
+        status_class = "bg-cumplido" if row.get('CUMPLIDO', '') == 'Sí' else "bg-pendiente"
         badge_html = f'<span class="badge-status {status_class}">{cumplido}</span>'
-        
+        id_escaped = _html.escape(str(id_reg), quote=True)
+
         # Acciones
         acciones = ""
         if es_propietario:
             acciones = f"""
                 <div class="d-flex justify-content-end gap-1">
-                    <a href="/editar_registro?id_registro={id_reg}" class="btn btn-sm btn-outline-primary border-0" title="Editar">
+                    <a href="/editar_registro?id_registro={id_escaped}" class="btn btn-sm btn-outline-primary border-0" title="Editar">
                         <i class="fas fa-edit"></i>
                     </a>
                     <form action="/eliminar_registro_accion" method="POST" class="d-inline" onsubmit="return confirm('¿Eliminar este registro?')">
                         <input type="hidden" name="csrf_token" value="__CSRF_TOKEN__">
-                        <input type="hidden" name="id_registro" value="{id_reg}">
+                        <input type="hidden" name="id_registro" value="{id_escaped}">
                         <button type="submit" class="btn btn-sm btn-outline-danger border-0" title="Eliminar">
                             <i class="fas fa-trash-alt"></i>
                         </button>
                     </form>
                 </div>
             """
-        
+
+        fecha = _html.escape(str(row.get('FECHA', ''))[:10])
+        actividad = _html.escape(str(row.get('TIPO DE ACTIVIDAD', '')))
+        dependencia = _html.escape(str(row.get('DEPENDENCIA', '')))
+        solicitante = _html.escape(str(row.get('SOLICITANTE', '')))
         html += f"""
         <tr>
-            <td class="ps-4 fw-bold">{str(row.get('FECHA', ''))[:10]}</td>
-            <td title="{_html.escape(str(row.get('TIPO DE ACTIVIDAD', '')))}">{_html.escape(str(row.get('TIPO DE ACTIVIDAD', ''))[:50])}</td>
-            <td>{_html.escape(str(row.get('DEPENDENCIA', '')))}</td>
-            <td>{_html.escape(str(row.get('SOLICITANTE', '')))}</td>
+            <td class="ps-4 fw-bold">{fecha}</td>
+            <td title="{actividad}">{actividad[:50]}</td>
+            <td>{dependencia}</td>
+            <td>{solicitante}</td>
             <td class="text-center">{badge_html}</td>
             <td class="pe-4">{acciones}</td>
         </tr>
@@ -510,4 +528,4 @@ def generar_gestion_auditoria():
         </a>
       </div>
     </div>
-    """
+    """

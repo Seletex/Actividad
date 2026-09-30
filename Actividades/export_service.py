@@ -13,6 +13,35 @@ from database import cargar_registros
 from utils import medir_tiempo
 
 
+def _neutralizar_formula(valor):
+    """Evita que Excel/CSV interpreten texto de usuarios como fórmula."""
+    if valor is None:
+        return ""
+    try:
+        if pd.isna(valor):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    texto = str(valor)
+    if texto.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + texto
+    return texto
+
+
+def preparar_dataframe_exportable(df):
+    """Devuelve una copia segura para escribir en Excel o CSV."""
+    if df is None:
+        return pd.DataFrame()
+    seguro = df.copy()
+    for columna in seguro.columns:
+        if not (
+            pd.api.types.is_numeric_dtype(seguro[columna])
+            or pd.api.types.is_datetime64_any_dtype(seguro[columna])
+        ):
+            seguro[columna] = seguro[columna].map(_neutralizar_formula)
+    return seguro
+
+
 @medir_tiempo
 def exportar_registros_filtrados(fecha_inicio=None, fecha_fin=None, usuario=None, actividad=None):
     """Exporta registros filtrados. Retorna (DataFrame, dict_estadísticas)"""
@@ -196,21 +225,27 @@ def generar_reporte_excel(df, estadisticas, output_path):
     """Genera un archivo Excel con datos + estadísticas"""
     try:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Registros', index=False)
+            preparar_dataframe_exportable(df).to_excel(
+                writer, sheet_name='Registros', index=False
+            )
             
             stats_df = pd.DataFrame([
                 ['Total de registros', estadisticas.get('total_registros', 0)],
                 ['Fecha inicio', estadisticas.get('fecha_inicio', 'N/A')],
                 ['Fecha fin', estadisticas.get('fecha_fin', 'N/A')]
             ], columns=['Métrica', 'Valor'])
-            stats_df.to_excel(writer, sheet_name='Estadísticas', index=False)
+            preparar_dataframe_exportable(stats_df).to_excel(
+                writer, sheet_name='Estadísticas', index=False
+            )
             
             if 'conteo_por_actividad' in estadisticas:
                 act_df = pd.DataFrame(
                     estadisticas['conteo_por_actividad'].items(),
                     columns=['Actividad', 'Cantidad']
                 )
-                act_df.to_excel(writer, sheet_name='Estadísticas', startrow=5, index=False)
+                preparar_dataframe_exportable(act_df).to_excel(
+                    writer, sheet_name='Estadísticas', startrow=5, index=False
+                )
         
         return True
     except Exception as e:
@@ -495,11 +530,15 @@ def generar_informe_template(df, output_path, contrato_data=None):
                 fecha_atencion = fecha_atencion.strftime('%Y-%m-%d')
             
             valores = [
-                actividad_actual, fecha,
-                row.get('DEPENDENCIA', ''), row.get('SOLICITANTE', ''),
-                row.get('TIPO DE SOLICITUD', ''), row.get('MEDIO DE SOLICITUD', ''),
-                row.get('CUMPLIDO'), fecha_atencion,
-                row.get('OBSERVACIONES')
+                _neutralizar_formula(actividad_actual),
+                fecha,
+                _neutralizar_formula(row.get('DEPENDENCIA', '')),
+                _neutralizar_formula(row.get('SOLICITANTE', '')),
+                _neutralizar_formula(row.get('TIPO DE SOLICITUD', '')),
+                _neutralizar_formula(row.get('MEDIO DE SOLICITUD', '')),
+                _neutralizar_formula(row.get('CUMPLIDO')),
+                fecha_atencion,
+                _neutralizar_formula(row.get('OBSERVACIONES')),
             ]
             
             for col_idx, valor in enumerate(valores, start=1):

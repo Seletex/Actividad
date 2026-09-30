@@ -168,9 +168,16 @@ def sincronizar_datos_usuarios(ruta_seleccionada=None):
         for tabla in _TABLAS_RESPALDO:
             nombre = _nombre_respaldo(tabla)
             respaldos[tabla] = nombre
-            cursor.execute(
-                f'CREATE TABLE "{nombre}" AS SELECT * FROM "{tabla}"'
-            )
+            if tabla == "usuarios":
+                # No duplicar hashes de contraseña en tablas de respaldo.
+                cursor.execute(
+                    f'CREATE TABLE "{nombre}" AS SELECT username, '
+                    'debe_cambiar_contrasena FROM "usuarios"'
+                )
+            else:
+                cursor.execute(
+                    f'CREATE TABLE "{nombre}" AS SELECT * FROM "{tabla}"'
+                )
 
         for usuario in usuarios:
             resumen["usuarios_nuevos"] += _insertar_usuario(cursor, usuario)

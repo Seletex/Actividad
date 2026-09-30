@@ -13,6 +13,7 @@ from datetime import datetime
 
 import database as db
 from config import logger
+from export_service import preparar_dataframe_exportable
 
 
 def _json_bytes(data):
@@ -43,6 +44,7 @@ def crear_respaldo_completo():
     """Crea un ZIP descargable con los datos operativos de la aplicación."""
     generado = datetime.now().strftime("%Y%m%d_%H%M%S")
     registros = db.cargar_registros(None)
+    registros_export = preparar_dataframe_exportable(registros)
     usuarios = _leer_usuarios()
     listas = _leer_listas()
     resumen = {
@@ -63,11 +65,11 @@ def crear_respaldo_completo():
         # CSVutf-8 con BOM para abrirlo directamente en Excel.
         zip_file.writestr(
             "registros.csv",
-            registros.to_csv(index=False).encode("utf-8-sig"),
+            registros_export.to_csv(index=False).encode("utf-8-sig"),
         )
         try:
             excel = io.BytesIO()
-            registros.to_excel(excel, index=False, engine="openpyxl")
+            registros_export.to_excel(excel, index=False, engine="openpyxl")
             zip_file.writestr("registros.xlsx", excel.getvalue())
         except Exception:
             logger.exception("No se pudo incluir el Excel en el respaldo")
