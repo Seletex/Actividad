@@ -526,6 +526,9 @@ def generar_gestion_auditoria():
         <a href="/auditoria" class="btn btn-outline-secondary">
           <i class="fas fa-eye"></i> Ver bitácora de auditoría
         </a>
+        <a href="/sesiones" class="btn btn-outline-secondary">
+          <i class="fas fa-user-clock"></i> Ver y cerrar sesiones activas
+        </a>
       </div>
     </div>
     """

@@ -15,7 +15,7 @@ import time
 import random
 import shutil
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import (
     EXCEL_FILE, USERS_FILE, CONFIG_FILE, DB_FILE, DATABASE_URL, COLUMNAS, 
     ACTIVIDADES_DEFAULT, UBICACIONES_DEFAULT, TIPOS_SOLICITUD_DEFAULT, MEDIOS_SOLICITUD_DEFAULT,
@@ -184,7 +184,13 @@ def fix_query(query):
         salida.append(char)
         i += 1
 
-    return "".join(salida).replace("INSERT OR IGNORE", "INSERT").replace("AUTOINCREMENT", "")
+    consulta = "".join(salida)
+    if DATABASE_URL:
+        # PostgreSQL no conoce la sintaxis de SQLite para estos casos.
+        consulta = consulta.replace("INSERT OR IGNORE", "INSERT")
+        consulta = consulta.replace("INSERT OR REPLACE", "INSERT")
+        consulta = consulta.replace("AUTOINCREMENT", "")
+    return consulta
 
 @retry_operation(max_retries=5, base_delay=1.0)
 def inicializar_tablas():
@@ -247,6 +253,41 @@ def inicializar_tablas():
                 "COALESCE((SELECT MAX(id) FROM bitacora), 0) + 1, false)"
             )
         
+        # 1c. Tabla de sesiones activas para revocacion desde el servidor.
+        # Flask guarda la sesion en una cookie firmada: sin este registro en la
+        # base, esa cookie seguiría siendo válida aunque se cambie la contraseña
+        # o se elimine el usuario. Cada sesión lleva un token cuyo 'revision'
+        # se compara con el del usuario en cada petición.
+        sesiones_query = """
+            CREATE TABLE IF NOT EXISTS sesiones (
+                token TEXT PRIMARY KEY,
+                usuario TEXT,
+                revision INTEGER DEFAULT 0,
+                creado TEXT,
+                visto TEXT,
+                ip TEXT
+            )
+        """
+        cursor.execute(fix_query(sesiones_query))
+        if not DATABASE_URL:
+            cols_ses = [row[1] for row in cursor.execute("PRAGMA table_info(sesiones)").fetchall()]
+            for col, tipo in (
+                ("revision", "INTEGER DEFAULT 0"),
+                ("creado", "TEXT"),
+                ("visto", "TEXT"),
+                ("ip", "TEXT"),
+            ):
+                if col not in cols_ses:
+                    cursor.execute(f"ALTER TABLE sesiones ADD COLUMN {col} {tipo}")
+
+        # Columna de revocacion por usuario (rotada al cambiar la contrasena).
+        if DATABASE_URL:
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS revision_sesion INTEGER DEFAULT 0")
+        else:
+            cols_usr = [row[1] for row in cursor.execute("PRAGMA table_info(usuarios)").fetchall()]
+            if "revision_sesion" not in cols_usr:
+                cursor.execute("ALTER TABLE usuarios ADD COLUMN revision_sesion INTEGER DEFAULT 0")
+
         # 2. Crear tabla de actividades personales
         cursor.execute(fix_query("CREATE TABLE IF NOT EXISTS actividades_personales (username TEXT, actividad TEXT, UNIQUE(username, actividad))"))
         
@@ -688,6 +729,169 @@ def usuario_tiene_contrasena(usuario):
         return bool(row and row["password_hash"])
     except Exception:
         logger.exception("Error consultando contraseña configurada")
+        return False
+
+
+# =============================================================================
+# SESIONES ACTIVAS Y REVOCACIÓN
+# =============================================================================
+
+def registrar_sesion(token, usuario, ip="", revision=None):
+    """Da de alta una sesión en el servidor para poder revocarla.
+
+    Si no se indica ``revision``, hereda la del usuario: si su revisión ya fue
+    rotada, un token nuevo debe nacer en esa revisión o se invalidaría a sí
+    mismo en la petición siguiente.
+    """
+    if not token or not usuario:
+        return False
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            if revision is None:
+                cursor.execute(
+                    fix_query(
+                        "SELECT COALESCE(revision_sesion, 0) FROM usuarios WHERE username = ?"
+                    ),
+                    (usuario,),
+                )
+                fila = cursor.fetchone()
+                revision = fila[0] if fila else 0
+            ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                fix_query(
+                    "INSERT OR REPLACE INTO sesiones "
+                    "(token, usuario, revision, creado, visto, ip) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"
+                ),
+                (token, usuario, int(revision or 0), ahora, ahora, (ip or "")[:64]),
+            )
+        return True
+    except Exception:
+        logger.exception("Error registrando sesión")
+        return False
+
+
+def sesion_es_valida(token, usuario):
+    """Comprueba que la sesión siga vigente en el servidor.
+
+    Devuelve ``False`` si el token no existe, si ya no corresponde al usuario
+    indicado o si la revisión del token no coincide con la del usuario. Esto
+    permite cerrar sesiones desde el servidor al cambiar la contraseña,
+    eliminar el usuario o forzar un cierre general.
+    """
+    if not token or not usuario:
+        return False
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "SELECT s.revision, u.revision_sesion FROM sesiones s "
+                    "JOIN usuarios u ON u.username = s.usuario "
+                    "WHERE s.token = ? AND s.usuario = ?"
+                ),
+                (token, usuario),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            rev_token = row["revision"] if row["revision"] is not None else 0
+            rev_user = row["revision_sesion"] if row["revision_sesion"] is not None else 0
+            ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                fix_query("UPDATE sesiones SET visto = ? WHERE token = ?"),
+                (ahora, token),
+            )
+        return int(rev_token) == int(rev_user)
+    except Exception:
+        logger.exception("Error validando sesión")
+        return False
+
+
+def revocar_token_sesion(token):
+    """Invalida un único token de sesión (por ejemplo, al cerrar sesión)."""
+    if not token:
+        return False
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(fix_query("DELETE FROM sesiones WHERE token = ?"), (token,))
+        return True
+    except Exception:
+        logger.exception("Error revocando token de sesión")
+        return False
+
+
+def revocar_sesiones(usuario=None):
+    """Invalida sesiones. Sin ``usuario`` cierra todas.
+
+    Para revocar todas se rotan las revisiones de los usuarios y se borran los
+    tokens: es la forma de expulsar a todo el mundo sin depender del proceso.
+    """
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            if usuario:
+                cursor.execute(
+                    fix_query("DELETE FROM sesiones WHERE usuario = ?"), (usuario,)
+                )
+                cursor.execute(
+                    fix_query(
+                        "UPDATE usuarios SET revision_sesion = "
+                        "COALESCE(revision_sesion, 0) + 1 WHERE username = ?"
+                    ),
+                    (usuario,),
+                )
+            else:
+                cursor.execute(
+                    fix_query(
+                        "UPDATE usuarios SET revision_sesion = "
+                        "COALESCE(revision_sesion, 0) + 1"
+                    )
+                )
+                cursor.execute(fix_query("DELETE FROM sesiones"))
+        return True
+    except Exception:
+        logger.exception("Error revocando sesiones")
+        return False
+
+
+def listar_sesiones(usuario=None, limite=200):
+    """Devuelve las sesiones activas, opcionalmente de un usuario."""
+    try:
+        sql = "SELECT token, usuario, creado, visto, ip FROM sesiones"
+        params = []
+        if usuario:
+            sql += " WHERE usuario = ?"
+            params.append(usuario)
+        sql += " ORDER BY visto DESC LIMIT ?"
+        params.append(int(limite))
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(fix_query(sql), tuple(params))
+            filas = cursor.fetchall()
+        return [dict(f) for f in filas]
+    except Exception:
+        logger.exception("Error listando sesiones")
+        return []
+
+
+def purgar_sesiones_antiguas(horas=24):
+    """Elimina tokens cuyo último uso es más viejo que ``horas``."""
+    try:
+        limite = (
+            datetime.now() - timedelta(hours=horas)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query("DELETE FROM sesiones WHERE COALESCE(visto, creado) < ?"),
+                (limite,),
+            )
+        return True
+    except Exception:
+        logger.exception("Error purgando sesiones antiguas")
         return False
 
 

@@ -30,7 +30,9 @@ from database import (
     obtener_configuracion_usuario, guardar_configuracion_usuario,
     verificar_credenciales, establecer_contrasena, usuario_tiene_contrasena,
     usuario_debe_cambiar_contrasena, marcar_debe_cambiar_contrasena,
-    registrar_auditoria, obtener_bitacora, limpiar_bitacora
+    registrar_auditoria, obtener_bitacora, limpiar_bitacora,
+    registrar_sesion, sesion_es_valida, revocar_sesiones, revocar_token_sesion,
+    listar_sesiones, purgar_sesiones_antiguas
 )
 from web_security import (
     generar_csrf_token, csrf_protect, login_bloqueado,
@@ -60,7 +62,8 @@ from html_utils import (
 from templates import (
     LOGIN_TEMPLATE, MAIN_TEMPLATE, GESTION_TEMPLATE, LISTADO_TEMPLATE,
     EXPORTAR_TEMPLATE, ESTADISTICAS_TEMPLATE, FORMULARIO_REGISTRO,
-    EDIT_REGISTRO_TEMPLATE, ACCESO_GRANTED_TEMPLATE, CAMBIAR_CONTRASENA_TEMPLATE
+    EDIT_REGISTRO_TEMPLATE, ACCESO_GRANTED_TEMPLATE, CAMBIAR_CONTRASENA_TEMPLATE,
+    SHELL_SESIONES_TEMPLATE
 )
 
 app = Flask(__name__)
@@ -104,6 +107,29 @@ def _inyectar_csrf(html_page):
     html_page = re.sub(r'<form[^>]*method=["\']POST["\'][^>]*>', _add, html_page, flags=re.IGNORECASE)
     html_page = re.sub(r'<form[^>]*method=["\']post["\'][^>]*>', _add, html_page, flags=re.IGNORECASE)
     return html_page
+
+
+@app.before_request
+def _validar_sesion():
+    """Comprueba en el servidor que la sesión siga vigente.
+
+    La cookie de sesión de Flask está firmada, pero no se puede revocar: sin
+    esta comprobación, cambiar la contraseña o eliminar un usuario no cortaría
+    las sesiones ya abiertas. Aquí se compara el token de la sesión con la tabla
+    `sesiones`, cuya revisión se rota en cada revocación.
+    """
+    usuario = session.get('usuario')
+    if not usuario:
+        return None
+    token = session.get('sesion_token')
+    if not token or not sesion_es_valida(token, usuario):
+        # Sesión cerrada desde el servidor: limpiarla y echar al usuario.
+        session.clear()
+        registrar_auditoria(
+            usuario, "SESION_REVOCADA", "Sesión invalidada desde el servidor", _ip_cliente()
+        )
+        return redirect(url_for('index', aviso='Su sesión se cerró. Ingrese de nuevo.'))
+    return None
 
 
 @app.after_request
@@ -732,6 +758,11 @@ def login():
     session.clear()
     session['usuario'] = usuario
     session.permanent = True
+    # Token de sesión en el servidor: permite revocarla si cambia la contraseña,
+    # si se elimina el usuario o si el administrador fuerza el cierre.
+    token_sesion = secrets.token_urlsafe(32)
+    session['sesion_token'] = token_sesion
+    registrar_sesion(token_sesion, usuario, ip)
     generar_csrf_token()
     registrar_intento_exitoso(ip)
     registrar_auditoria(usuario, "LOGIN", "Inicio de sesión", ip)
@@ -747,8 +778,12 @@ def login():
 def logout():
     ip = _ip_cliente()
     user = session.get('usuario')
+    token = session.get('sesion_token')
     if user:
         registrar_auditoria(user, "LOGOUT", "Cierre de sesión", ip)
+    if token:
+        # Borra solo este token: las demás sesiones del usuario siguen vivas.
+        revocar_token_sesion(token)
     session.clear()
     return redirect(url_for('index'))
 
@@ -818,6 +853,19 @@ def cambiar_contrasena():
     ok, msg = establecer_contrasena(usuario, nueva, limpiar_debe_cambiar=True)
     accion = "CONTRASENA_INICIAL" if not usuario_tiene_contrasena(usuario) else "CAMBIO_CONTRASENA"
     registrar_auditoria(usuario, accion, msg, ip)
+
+    if ok:
+        # Cerrar el resto de sesiones del usuario (la de este navegador se
+        # conserva renombrando su token) para que un dispositivo extraído no
+        # siga operando con la clave anterior.
+        token_actual = session.get('sesion_token')
+        revocar_sesiones(usuario)
+        nuevo_token = secrets.token_urlsafe(32)
+        registrar_sesion(nuevo_token, usuario, ip)
+        session['sesion_token'] = nuevo_token
+        registrar_auditoria(
+            usuario, "SESIONES_REVOCADAS", "Cierre de otras sesiones tras cambiar la contraseña", ip
+        )
 
     # Limpiar flag de cambio forzado en la sesión
     session.pop('debe_cambiar', None)
@@ -946,6 +994,123 @@ def auditoria():
     return _inyectar_csrf(page)
 
 
+@app.route('/sesiones', methods=['GET'])
+@login_required
+@admin_required
+@cambio_requerido
+def sesiones_activas():
+    """Panel de sesiones activas: permite cerrar accesos en cualquier momento."""
+    filas_ses = listar_sesiones(limite=200)
+    token_actual = session.get('sesion_token')
+
+    if filas_ses:
+        partes = []
+        for s in filas_ses:
+            propio = s['token'] == token_actual
+            quien = html.escape(str(s.get('usuario') or ''))
+            marca = ' <span class="badge bg-info text-dark">esta sesión</span>' if propio else ''
+            celda_ip = html.escape(str(s.get('ip') or ''))
+            celda_creado = html.escape(str(s.get('creado') or ''))
+            celda_visto = html.escape(str(s.get('visto') or ''))
+            token_esc = html.escape(str(s.get('token') or ''), quote=True)
+            partes.append(
+                '<tr>'
+                f'<td>{quien}{marca}</td>'
+                f'<td>{celda_ip}</td>'
+                f'<td>{celda_creado}</td>'
+                f'<td>{celda_visto}</td>'
+                '<td class="text-end">'
+                '<form action="/revocar_sesion" method="POST" style="display:inline;">'
+                f'<input type="hidden" name="token" value="{token_esc}">'
+                '<button class="btn btn-sm btn-outline-danger border-0" type="submit">Cerrar</button>'
+                '</form></td></tr>'
+            )
+        tabla = ''.join(partes)
+    else:
+        tabla = "<tr><td colspan='5' class='text-center text-muted'>No hay sesiones activas</td></tr>"
+
+    alertas = ""
+    if request.args.get('msg'):
+        alertas = ('<div class="alert alert-success alert-dismissible fade show">✅ '
+                   + html.escape(str(request.args.get('msg')))
+                   + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>')
+    if request.args.get('error'):
+        alertas = ('<div class="alert alert-danger alert-dismissible fade show">❌ '
+                   + html.escape(str(request.args.get('error')))
+                   + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>')
+
+    cuerpo = f'''
+    <div class="container py-4">
+      {alertas}
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0"><i class="fas fa-user-clock"></i> Sesiones activas</h5>
+        <form action="/revocar_todas_sesiones" method="POST" onsubmit="return confirm('¿Cerrar TODAS las sesiones de todos los usuarios? Todos deberán volver a entrar.')">
+          <button class="btn btn-outline-danger btn-sm" type="submit">
+            <i class="fas fa-door-open"></i> Cerrar todas las sesiones
+          </button>
+        </form>
+      </div>
+      <p class="text-muted small">
+        Cerrar una sesión termina el acceso de esa persona de inmediato, sin esperar
+        a que expire la cookie. Si un usuario pierde su dispositivo, ciérrale la sesión aquí.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead class="table-light">
+            <tr><th>Usuario</th><th>IP</th><th>Inicio</th><th>Última actividad</th><th></th></tr>
+          </thead>
+          <tbody>{tabla}</tbody>
+        </table>
+      </div>
+      <a href="/gestion" class="btn btn-outline-secondary btn-sm mt-3">
+        <i class="fas fa-arrow-left"></i> Volver
+      </a>
+    </div>
+    '''
+
+    # Sustitución por marcadores: la plantilla lleva CSS con llaves, que
+    # str.format() interpretaría como campos.
+    page = SHELL_SESIONES_TEMPLATE.replace('{contenido}', cuerpo)
+    return _inyectar_csrf(page)
+
+
+@app.route('/revocar_sesion', methods=['POST'])
+@login_required
+@admin_required
+@csrf_protect
+def revocar_sesion_route():
+    ip = _ip_cliente()
+    objetivo = request.form.get('token', '')
+    if not objetivo:
+        return redirect(url_for('sesiones_activas', error='Sesión no indicada'))
+    sesiones = {s['token']: s for s in listar_sesiones(limite=500)}
+    datos = sesiones.get(objetivo)
+    revocar_token_sesion(objetivo)
+    if datos:
+        registrar_auditoria(
+            session.get('usuario'), "REVOCAR_SESION",
+            f"Sesión cerrada de {datos.get('usuario')} ({datos.get('ip')})", ip
+        )
+    return redirect(url_for('sesiones_activas', msg='Sesión cerrada'))
+
+
+@app.route('/revocar_todas_sesiones', methods=['POST'])
+@login_required
+@admin_required
+@csrf_protect
+def revocar_todas_sesiones_route():
+    ip = _ip_cliente()
+    propio = session.get('usuario')
+    revocar_sesiones()  # Sin usuario: expulsa a todos
+    registrar_auditoria(propio, "REVOCAR_TODAS_SESIONES", "Cierre global de sesiones", ip)
+    # El cierre global incluye la sesión de quien lo ordena: se emite un token
+    # nuevo para que no se quede fuera a sí mismo.
+    nuevo = secrets.token_urlsafe(32)
+    registrar_sesion(nuevo, propio, ip)
+    session['sesion_token'] = nuevo
+    return redirect(url_for('sesiones_activas', msg='Todas las sesiones fueron cerradas'))
+
+
 @app.route('/limpiar_auditoria', methods=['POST'])
 @login_required
 @admin_required
@@ -993,7 +1158,11 @@ def eliminar_usuario():
         if usuario in data.get("usuarios", []):
             data["usuarios"].remove(usuario)
             if guardar_usuarios(data):
+                # Sin esto, la cookie de sesión del usuario eliminado seguiría
+                # valiendo hasta 12 horas aunque ya no exista en la base.
+                revocar_sesiones(usuario)
                 registrar_auditoria(session.get('usuario'), "ELIMINAR_USUARIO", f"Usuario eliminado: {usuario}", ip)
+                registrar_auditoria(session.get('usuario'), "SESIONES_REVOCADAS", f"Sesiones cerradas de {usuario}", ip)
                 return redirect(url_for('gestion', msg='Usuario eliminado'))
     return redirect(url_for('gestion', error='Error al eliminar usuario'))
 
@@ -1026,6 +1195,14 @@ def asignar_contrasena():
         detalle = f"Contraseña asignada a {target}"
 
     registrar_auditoria(session.get('usuario'), "ASIGNAR_CONTRASENA", detalle, ip)
+
+    if target != session.get('usuario'):
+        # Si el admin redefine la clave de otro usuario, ese usuario debe
+        # volver a entrar con la nueva contraseña.
+        revocar_sesiones(target)
+        registrar_auditoria(
+            session.get('usuario'), "SESIONES_REVOCADAS", f"Sesiones cerradas de {target}", ip
+        )
     return redirect(url_for('gestion', msg=f'Contraseña actualizada para {target}'))
 
 
@@ -1456,6 +1633,9 @@ def initialize_app():
             inicializar_config()
             inicializar_excel()
             aplicar_password_admin_inicial()
+            # Los tokens de sesión caducados no sirven para nada: se limpian al
+            # arrancar para que la tabla no crezca sin control.
+            purgar_sesiones_antiguas(horas=24)
         logger.info("Aplicación inicializada correctamente (Usuarios, Config, Excel)")
     except Exception:
         logger.exception("Error durante la inicialización")

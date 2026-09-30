@@ -1313,3 +1313,43 @@ ACCESO_GRANTED_TEMPLATE = """
 </body>
 </html>
 """
+
+SHELL_SESIONES_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sesiones activas - Sistema de Actividades</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        """ + _SHARED_STYLES + """
+        .table-sesiones th {
+            background: #f8f9fa;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+    </style>
+</head>
+<body>
+    """ + _NAVBAR_TEMPLATE.replace("{icono}", "user-clock").replace("{titulo}", "Sesiones Activas") + """
+
+    <div class="container-fluid p-0">
+        <div class="row g-0">
+            """ + _SIDEBAR_TEMPLATE.format(active_inicio="", active_listado="", active_gestion="", active_estadisticas="", active_exportar="") + """
+
+            <div class="col-md-10 main-content">
+                <div class="container-fluid">
+                    {contenido}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+"""
