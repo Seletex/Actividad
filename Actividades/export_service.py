@@ -29,7 +29,9 @@ def exportar_registros_filtrados(fecha_inicio=None, fecha_fin=None, usuario=None
         if fecha_inicio:
             df = df[df['FECHA'] >= pd.to_datetime(fecha_inicio)]
         if fecha_fin:
-            df = df[df['FECHA'] <= pd.to_datetime(fecha_fin)]
+            # La fecha final del formulario es inclusiva: incluye todo el día.
+            fin_inclusive = pd.to_datetime(fecha_fin) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+            df = df[df['FECHA'] <= fin_inclusive]
         if actividad and actividad != 'Todas' and 'TIPO DE ACTIVIDAD' in df.columns:
             df = df[df['TIPO DE ACTIVIDAD'] == actividad]
         
