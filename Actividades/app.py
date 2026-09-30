@@ -40,6 +40,7 @@ from activity_service import agregar_actividad_personal, eliminar_actividad_pers
 from admin_bootstrap import aplicar_password_admin_inicial
 from excel_import_service import reemplazar_registros_desde_excel
 from user_data_service import sincronizar_datos_usuarios
+from backup_service import crear_respaldo_completo
 from export_service import (
     exportar_registros_filtrados, obtener_estadisticas_exportacion,
     generar_informe_template
@@ -317,6 +318,21 @@ def _html_importacion(usuario_actual):
                     <i class="fas fa-sync-alt"></i> Sincronizar datos de usuarios
                 </button>
             </form>
+        </div>
+    </div>
+
+    <div class="card mb-4 border-success">
+        <div class="card-header bg-success text-white">
+            <h5 class="mb-0"><i class="fas fa-download"></i> Descargar respaldo completo</h5>
+        </div>
+        <div class="card-body">
+            <p class="small mb-3">
+                Genera un ZIP con registros, usuarios, actividades personales,
+                configuraciones y listas globales. No incluye contraseñas.
+            </p>
+            <a href="/descargar_respaldo" class="btn btn-success">
+                <i class="fas fa-file-archive"></i> Descargar respaldo ZIP
+            </a>
         </div>
     </div>
     """
@@ -602,6 +618,34 @@ def sincronizar_usuarios():
                 os.remove(ruta_temporal)
             except Exception:
                 pass
+
+
+@app.route('/descargar_respaldo', methods=['GET'])
+@login_required
+@admin_required
+@cambio_requerido
+def descargar_respaldo():
+    """Descarga un ZIP con los datos operativos de la aplicación."""
+    try:
+        archivo, nombre, resumen = crear_respaldo_completo()
+        registrar_auditoria(
+            session.get('usuario'),
+            "DESCARGAR_RESPALDO",
+            (
+                f"Archivo: {nombre}; registros: {resumen['registros']}; "
+                f"usuarios: {resumen['usuarios']}"
+            ),
+            _ip_cliente(),
+        )
+        return send_file(
+            archivo,
+            as_attachment=True,
+            download_name=nombre,
+            mimetype="application/zip",
+        )
+    except Exception:
+        logger.exception("Error generando respaldo completo")
+        return redirect(url_for('gestion', error='No se pudo generar el respaldo'))
 
 
 @app.route('/agregar_registro', methods=['POST'])
