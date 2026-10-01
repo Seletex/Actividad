@@ -749,14 +749,18 @@ def registrar_sesion(token, usuario, ip="", revision=None):
         with db_session() as conn:
             cursor = get_cursor(conn)
             if revision is None:
+                # Acceso por nombre de columna, no por posición: con
+                # RealDictCursor (PostgreSQL) fila[0] lanza KeyError, mientras
+                # que por nombre funciona tanto en PostgreSQL como en SQLite.
                 cursor.execute(
                     fix_query(
-                        "SELECT COALESCE(revision_sesion, 0) FROM usuarios WHERE username = ?"
+                        "SELECT COALESCE(revision_sesion, 0) AS revision "
+                        "FROM usuarios WHERE username = ?"
                     ),
                     (usuario,),
                 )
                 fila = cursor.fetchone()
-                revision = fila[0] if fila else 0
+                revision = fila["revision"] if fila else 0
             ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(
                 fix_query(
