@@ -82,8 +82,12 @@ def generar_informe_final_resumen(df, output_path, contrato_data=None, usuario=N
             
             rango = 'N/A'
             try:
-                if not df.empty and 'FECHA' in df.columns:
-                    fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce').dropna()
+                # Rango sobre la fecha de atención, igual que el filtro del reporte.
+                columna_rango = (
+                    '_FECHA_FILTRO' if '_FECHA_FILTRO' in df.columns else 'FECHA'
+                )
+                if not df.empty and columna_rango in df.columns:
+                    fechas_dt = pd.to_datetime(df[columna_rango], errors='coerce').dropna()
                     if not fechas_dt.empty:
                         rango = f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}"
             except Exception: pass

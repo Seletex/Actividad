@@ -285,6 +285,11 @@ def _fecha_valida(valor):
         return ""
 
 
+def _hora_actual():
+    """Hora actual HH:MM:SS, para acompañar a la fecha en el campo FECHA."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
 def _html_importacion(usuario_actual):
     """Muestra el formulario de carga de Excel únicamente al administrador."""
     if usuario_actual != "admin":
@@ -516,6 +521,11 @@ def actualizar_registro_accion():
         'OBSERVACIONES': sanitizar(request.form.get('observaciones'), 1000),
     }
 
+    # La fecha de atención manda: se escribe también en FECHA para que ambos
+    # campos coincidan y los filtros por fecha sean coherentes.
+    if fecha_atencion:
+        datos['FECHA'] = f"{fecha_atencion} {_hora_actual()}"
+
     if actualizar_registro(int(id_registro), datos, usuario_actual):
         registrar_auditoria(
             usuario_actual,
@@ -704,10 +714,10 @@ def agregar_registro():
         return redirect(url_for('index', error='El administrador no crea registros de actividad'))
 
     ahora = datetime.now()
-    fecha_ingresada = sanitizar(request.form.get('fecha_atencion'), 20)
+    fecha_ingresada = _fecha_valida(request.form.get('fecha_atencion'))
     if not fecha_ingresada:
         fecha_ingresada = ahora.strftime('%Y-%m-%d')
-    fecha_con_hora = f"{fecha_ingresada} {ahora.strftime('%H:%M:%S')}"
+    fecha_con_hora = f"{fecha_ingresada} {_hora_actual()}"
 
     registro = {
         'USUARIO': usuario_actual,
@@ -1570,6 +1580,9 @@ def exportar():
     )
     if df.empty:
         return redirect(url_for('exportar', error='No hay datos para exportar'))
+
+    # La columna de trabajo del filtro no debe aparecer en los archivos finales.
+    df = df.drop(columns=['_FECHA_FILTRO'], errors='ignore')
 
     tmp_path = None
     try:

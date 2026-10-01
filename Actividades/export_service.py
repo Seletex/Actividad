@@ -44,34 +44,47 @@ def preparar_dataframe_exportable(df):
 
 @medir_tiempo
 def exportar_registros_filtrados(fecha_inicio=None, fecha_fin=None, usuario=None, actividad=None):
-    """Exporta registros filtrados. Retorna (DataFrame, dict_estadísticas)"""
+    """Exporta registros filtrados. Retorna (DataFrame, dict_estadísticas)
+
+    Los filtros de fecha se aplican sobre FECHA ATENCIÓN (la fecha en que la
+    actividad se atendió). Si un registro no la tiene, se usa FECHA como
+    respaldo, para que ningún registro quede fuera por un dato faltante.
+    """
     try:
         df = cargar_registros(usuario)
         if df.empty:
             return pd.DataFrame(), {}
-        
+
         # Parsear fechas
         if 'FECHA' in df.columns:
             df['FECHA'] = pd.to_datetime(df['FECHA'], errors='coerce')
-        
+        if 'FECHA ATENCIÓN' in df.columns:
+            df['FECHA ATENCIÓN'] = pd.to_datetime(
+                df['FECHA ATENCIÓN'], errors='coerce'
+            )
+            # Columna de trabajo: atención tiene prioridad, FECHA es el respaldo.
+            df['_FECHA_FILTRO'] = df['FECHA ATENCIÓN'].fillna(df['FECHA'])
+        elif 'FECHA' in df.columns:
+            df['_FECHA_FILTRO'] = df['FECHA']
+
         # Aplicar filtros
-        if fecha_inicio:
-            df = df[df['FECHA'] >= pd.to_datetime(fecha_inicio)]
-        if fecha_fin:
+        if fecha_inicio and '_FECHA_FILTRO' in df.columns:
+            df = df[df['_FECHA_FILTRO'] >= pd.to_datetime(fecha_inicio)]
+        if fecha_fin and '_FECHA_FILTRO' in df.columns:
             # La fecha final del formulario es inclusiva: incluye todo el día.
             fin_inclusive = pd.to_datetime(fecha_fin) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-            df = df[df['FECHA'] <= fin_inclusive]
+            df = df[df['_FECHA_FILTRO'] <= fin_inclusive]
         if actividad and actividad != 'Todas' and 'TIPO DE ACTIVIDAD' in df.columns:
             df = df[df['TIPO DE ACTIVIDAD'] == actividad]
-        
+
         # Agrupamiento y ordenamiento solicitado
         if not df.empty:
             sort_cols = []
             if 'TIPO DE ACTIVIDAD' in df.columns: sort_cols.append('TIPO DE ACTIVIDAD')
-            if 'FECHA' in df.columns: sort_cols.append('FECHA')
+            if '_FECHA_FILTRO' in df.columns: sort_cols.append('_FECHA_FILTRO')
             if sort_cols:
                 df = df.sort_values(by=sort_cols)
-        
+
         stats = _calcular_estadisticas(df)
         return df, stats
     except Exception as e:
@@ -134,10 +147,15 @@ def obtener_estadisticas_exportacion(usuario=None, fecha_inicio=None, fecha_fin=
         if df.empty:
             return empty_result
         
-        # Parseo de fechas (exportar_registros_filtrados ya hace parte del proceso)
-        if 'FECHA' in df.columns:
+        # Parseo de fechas: se usa la misma columna que el filtro (_FECHA_FILTRO),
+        # es decir, FECHA ATENCIÓN con FECHA como respaldo.
+        if '_FECHA_FILTRO' in df.columns:
+            df['FECHA_DT'] = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce')
+        elif 'FECHA' in df.columns:
             df['FECHA_DT'] = pd.to_datetime(df['FECHA'], errors='coerce')
-            df = df.dropna(subset=['FECHA_DT'])
+        else:
+            return empty_result
+        df = df.dropna(subset=['FECHA_DT'])
         
         if df.empty:
             return empty_result
@@ -335,11 +353,11 @@ def generar_informe_template(df, output_path, contrato_data=None):
                         else:
                             nombre = 'VARIOS'
 
-            # Rango de fechas
+            # Rango de fechas (sobre la fecha de atención, igual que el filtro)
             rango = ''
             try:
-                if not df.empty and 'FECHA' in df.columns:
-                    fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce').dropna()
+                if not df.empty and '_FECHA_FILTRO' in df.columns:
+                    fechas_dt = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce').dropna()
                     if not fechas_dt.empty:
                         rango = f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}"
             except Exception:
@@ -442,8 +460,8 @@ def generar_informe_template(df, output_path, contrato_data=None):
  
 
         # Rango de fechas (Fila 6) - Mantener si es necesario o mover al final
-        if not df.empty and 'FECHA' in df.columns:
-            fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce').dropna()
+        if not df.empty and '_FECHA_FILTRO' in df.columns:
+            fechas_dt = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce').dropna()
             if not fechas_dt.empty:
                 ws.cell(row=6, column=3,
                         value=f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}")
@@ -637,8 +655,8 @@ def analizar_plantilla_contrato(df=None, contrato_data=None, output_json_path=No
             'RANGO_FECHAS': ''
         }
         try:
-            if not df.empty and 'FECHA' in df.columns:
-                fechas_dt = pd.to_datetime(df['FECHA'], errors='coerce').dropna()
+            if not df.empty and '_FECHA_FILTRO' in df.columns:
+                fechas_dt = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce').dropna()
                 if not fechas_dt.empty:
                     contrato_values['RANGO_FECHAS'] = f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}"
         except Exception:
