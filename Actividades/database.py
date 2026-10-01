@@ -1548,7 +1548,9 @@ def sincronizar_excel():
         df = cargar_registros()
         df_export = df.drop(columns=['ID']) if 'ID' in df.columns else df
         cols_final = [c for c in COLUMNAS if c != 'ID']
-        df_export = df_export[cols_final]
+        df_export = df_export[cols_final].fillna("")
+        for col in df_export.columns:
+            df_export[col] = df_export[col].astype(str).replace({'nan': '', 'None': '', 'NaT': '', 'null': ''})
         
         intentos = 3
         exito = False
@@ -1614,32 +1616,56 @@ def importar_desde_excel(file_path=None):
             cursor = get_cursor(conn)
             for _, row in df.iterrows():
                 try:
-                    fecha = str(row.get('FECHA', ''))
-                    fecha_atencion = str(row.get('FECHA ATENCIÓN', ''))
+                    def _clean_str(val):
+                        if pd.isna(val) or val is None:
+                            return ""
+                        s = str(val).strip()
+                        if s.lower() in ("nan", "none", "nat", "null"):
+                            return ""
+                        return s
+
+                    fecha = _clean_str(row.get('FECHA', ''))
+                    fecha_atencion = _clean_str(row.get('FECHA ATENCIÓN', ''))
+
+                    # Auto-completar fechas si una de las dos falta
+                    if not fecha_atencion and len(fecha) >= 10:
+                        fecha_atencion = fecha[:10]
+                    if not fecha and fecha_atencion:
+                        fecha = f"{fecha_atencion} 00:00:00"
+
+                    usuario = _clean_str(row.get('USUARIO', 'admin')) or 'admin'
+                    tipo_act = _clean_str(row.get('TIPO DE ACTIVIDAD', ''))
+                    dependencia = _clean_str(row.get('DEPENDENCIA', ''))
+                    solicitante = _clean_str(row.get('SOLICITANTE', ''))
+                    tipo_sol = _clean_str(row.get('TIPO DE SOLICITUD', ''))
+                    medio_sol = _clean_str(row.get('MEDIO DE SOLICITUD', ''))
+                    descripcion = _clean_str(row.get('DESCRIPCIÓN', ''))
+                    cumplido = _clean_str(row.get('CUMPLIDO', ''))
+                    observaciones = _clean_str(row.get('OBSERVACIONES', ''))
+
                     values = (
-                        str(row.get('USUARIO', 'admin')),
-                        str(row.get('TIPO DE ACTIVIDAD', '')),
-                        fecha,
-                        str(row.get('DEPENDENCIA', '')),
-                        str(row.get('SOLICITANTE', '')),
-                        str(row.get('TIPO DE SOLICITUD', '')),
-                        str(row.get('MEDIO DE SOLICITUD', '')),
-                        str(row.get('DESCRIPCIÓN', '')),
-                        str(row.get('CUMPLIDO', '')),
-                        fecha_atencion,
-                        str(row.get('OBSERVACIONES', ''))
+                        usuario, tipo_act, fecha, dependencia, solicitante,
+                        tipo_sol, medio_sol, descripcion, cumplido,
+                        fecha_atencion, observaciones
                     )
-                    
-                    # Comprobación de duplicado por clave de negocio
-                    cursor.execute(fix_query('''
-                        SELECT 1 FROM registros 
-                        WHERE usuario=? AND tipo_actividad=? AND fecha=? AND descripcion=? 
-                        LIMIT 1
-                    '''), (values[0], values[1], values[2], values[7]))
-                    
+
+                    # Comprobación de duplicado inteligente (evita insertar filas sin fecha si ya existe registro con/sin fecha)
+                    if not fecha:
+                        cursor.execute(fix_query('''
+                            SELECT 1 FROM registros 
+                            WHERE usuario=? AND descripcion=? 
+                            LIMIT 1
+                        '''), (usuario, descripcion))
+                    else:
+                        cursor.execute(fix_query('''
+                            SELECT 1 FROM registros 
+                            WHERE usuario=? AND tipo_actividad=? AND (fecha=? OR fecha_atencion=?) AND descripcion=? 
+                            LIMIT 1
+                        '''), (usuario, tipo_act, fecha, fecha_atencion, descripcion))
+
                     if cursor.fetchone():
                         continue
-                        
+
                     cursor.execute(fix_query('''
                         INSERT INTO registros (
                             usuario, tipo_actividad, fecha, dependencia, solicitante,
@@ -1650,7 +1676,7 @@ def importar_desde_excel(file_path=None):
                     count += 1
                 except Exception as e:
                     logger.error(f"Error importando fila: {e}")
-                    
+
         if count > 0:
             logger.info(f"✅ Sincronización completada: Agregados {count} registros nuevos.")
             clear_cache()
