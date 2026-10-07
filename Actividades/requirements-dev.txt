@@ -1,0 +1,5 @@
+# Dependencias solo para desarrollo y pruebas.
+# En produccion NO se instalan: Render usa requirements.txt.
+-r requirements.txt
+
+pytest>=8.0.0,<10.0
