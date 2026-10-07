@@ -1,0 +1,100 @@
+name: Pruebas
+
+# Corre la suite en cada cambio. Hay dos capas porque el proyecto usa dos
+# motores distintos: SQLite en el escritorio y PostgreSQL en Render.
+#
+# Capa 1 (sqlite): pruebas + simulador de PostgreSQL. Corre en Windows, Linux
+#   y macOS, sin instalar nada.
+# Capa 2 (postgres): PostgreSQL real de verdad, como el de produccion. Es la
+#   que detecta problemas de sintaxis o de tipos que el simulador no puede
+#   reproducir. Arranca marcada como no bloqueante (continue-on-error) porque
+#   es nueva; cuando este en verde se puede quitar esa marca.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Si se empuja dos veces seguidas, cancela la ejecucion anterior.
+concurrency:
+  group: pruebas-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sqlite:
+    name: Pruebas (SQLite + simulador de PostgreSQL)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Actividades
+
+    steps:
+      - name: Copiar el codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Comprobar que la sintaxis es valida
+        run: python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in pathlib.Path('.').glob('*.py')]"
+
+      - name: Ejecutar las pruebas
+        run: pytest tests/ -q --no-header
+
+  postgres:
+    name: Pruebas (PostgreSQL real)
+    runs-on: ubuntu-latest
+    # Capa nueva: reporta problemas sin bloquear el flujo. Quitar
+    # continue-on-error cuando se confirme que pasa de forma estable.
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pruebas
+          POSTGRES_PASSWORD: pruebas
+          POSTGRES_DB: actividades_pruebas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: Actividades
+
+    env:
+      ACTIVIDADES_TEST_PG: "1"
+      DATABASE_URL: postgresql://pruebas:pruebas@localhost:5432/actividades_pruebas
+
+    steps:
+      - name: Copiar el codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ejecutar las pruebas contra PostgreSQL
+        run: pytest tests/ -q --no-header

@@ -15,6 +15,7 @@ falla de forma explicita en vez de modificar informacion real. Se agrego porque
 en el pasado una prueba sin aislamiento termino mezclando datos de la red.
 """
 
+import atexit
 import os
 import shutil
 import sys
@@ -28,7 +29,16 @@ RAIZ_PROYECTO = Path(__file__).resolve().parent.parent
 if str(RAIZ_PROYECTO) not in sys.path:
     sys.path.insert(0, str(RAIZ_PROYECTO))
 
-_SALA_TEMPORAL = Path(tempfile.gettempdir()) / "actividades_pruebas"
+# Una carpeta por proceso: evita que dos ejecuciones simultaneas (o un
+# subproceso) se borren la base de datos mutuamente.
+_SALA_TEMPORAL = Path(tempfile.gettempdir()) / f"actividades_pruebas_{os.getpid()}"
+
+
+def _limpiar_sala_al_salir():
+    shutil.rmtree(_SALA_TEMPORAL, ignore_errors=True)
+
+
+atexit.register(_limpiar_sala_al_salir)
 
 if _SALA_TEMPORAL.exists():
     shutil.rmtree(_SALA_TEMPORAL, ignore_errors=True)
@@ -38,7 +48,25 @@ _DIR_LOCALAPPDATA = _SALA_TEMPORAL / "localappdata"
 _DIR_DATOS.mkdir(parents=True, exist_ok=True)
 _DIR_LOCALAPPDATA.mkdir(parents=True, exist_ok=True)
 
-os.environ["DATABASE_URL"] = ""                     # fuerza SQLite, nunca PostgreSQL real
+# PostgreSQL real solo se usa en integracion continua, donde la base es un
+# contenedor efimero sin datos. Para activarlo se define ACTIVIDADES_TEST_PG=1
+# y la URL debe apuntar a la maquina local: si apunta a otro sitio (por ejemplo
+# la base de Render) la suite se niega a arrancar en lugar de borrar la
+# informacion de la entidad.
+_USAR_POSTGRESQL = os.environ.get("ACTIVIDADES_TEST_PG", "") in ("1", "true", "yes")
+
+if _USAR_POSTGRESQL:
+    _url = os.environ.get("DATABASE_URL", "")
+    _host_seguro = any(h in _url for h in ("localhost", "127.0.0.1", "postgres:"))
+    if not _url or not _host_seguro:
+        raise RuntimeError(
+            "ACTIVIDADES_TEST_PG=1 exige un DATABASE_URL de PostgreSQL local "
+            "(localhost). Se rechaza '" + (_url or "(vacia)") + "' para no "
+            "conectarse a una base con datos reales."
+        )
+else:
+    os.environ["DATABASE_URL"] = ""    # fuerza SQLite, nunca PostgreSQL real
+
 os.environ["ACTIVIDADES_CENTRAL_DIR"] = str(_DIR_DATOS)
 os.environ["ACTIVIDADES_SKIP_OFFLINE_SYNC"] = "1"   # prohibido sincronizar con la red
 os.environ["LOCALAPPDATA"] = str(_DIR_LOCALAPPDATA)

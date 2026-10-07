@@ -21,8 +21,17 @@ from pathlib import Path
 
 class TestAislamiento:
     def test_no_hay_base_de_datos_de_produccion_configurada(self, db):
-        assert os.environ.get("DATABASE_URL", "") == "", \
-            "las pruebas no deben conectarse a PostgreSQL de produccion"
+        """Por defecto SQLite. En CI se admite PostgreSQL local."""
+        url = os.environ.get("DATABASE_URL", "")
+        usando_postgres = os.environ.get("ACTIVIDADES_TEST_PG", "") in ("1", "true", "yes")
+
+        if not usando_postgres:
+            assert url == "", \
+                "las pruebas locales no deben conectarse a PostgreSQL"
+        else:
+            assert url, "con ACTIVIDADES_TEST_PG=1 hace falta un DATABASE_URL"
+            assert any(h in url for h in ("localhost", "127.0.0.1", "postgres:")), \
+                f"el PostgreSQL de pruebas debe ser local, no {url}"
 
     def test_la_sincronizacion_con_la_red_esta_desactivada(self):
         assert os.environ.get("ACTIVIDADES_SKIP_OFFLINE_SYNC") == "1", \
@@ -35,6 +44,32 @@ class TestAislamiento:
             f"la base debe estar en {temporal}, no en {ruta.parent}"
         assert "TEMP" in str(ruta).upper() or "TMP" in str(ruta).upper(), \
             f"la base deberia estar en una carpeta temporal: {ruta}"
+
+    def test_la_url_de_postgresql_debe_ser_local(self):
+        """Comprueba el candado: una URL no local debe rechazarse.
+
+        Se lanza un subproceso aparte para no alterar la sesion de pruebas: si se
+        recargara conftest en este proceso, borraria la carpeta temporal que el
+        resto de pruebas esta usando.
+        """
+        import subprocess
+        import sys
+
+        entorno = dict(os.environ)
+        entorno["ACTIVIDADES_TEST_PG"] = "1"
+        # Una URL de "produccion" (no local) debe provocar un error claro.
+        entorno["DATABASE_URL"] = "postgresql://usuario@db.produccion/app"
+        entorno["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
+
+        proceso = subprocess.run(
+            [sys.executable, "-c", "import tests.conftest"],
+            capture_output=True, text=True, env=entorno,
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        assert proceso.returncode != 0, \
+            "una URL de PostgreSQL no local deberia ser rechazada"
+        assert "localhost" in (proceso.stderr or ""), \
+            f"el error deberia explicar la regla: {proceso.stderr[-400:]}"
 
     def test_las_variables_de_entorno_apuntan_a_temporal(self):
         datos = Path(os.environ["ACTIVIDADES_CENTRAL_DIR"]).resolve()
