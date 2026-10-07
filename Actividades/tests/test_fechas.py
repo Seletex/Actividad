@@ -17,6 +17,7 @@ from export_service import (
     _rango_fechas_texto,
     exportar_registros_filtrados,
 )
+from tests.conftest import consultar, ejecutar
 
 PATRON_RANGO = re.compile(r"\d{2}/\d{2}/\d{4}\s*al\s*\d{2}/\d{2}/\d{4}")
 
@@ -39,18 +40,14 @@ class TestAltaDeRegistro:
         })
         assert respuesta.status_code == 302
 
-        import sqlite3
-        con = sqlite3.connect(db.DB_FILE)
-        fila = con.execute(
-            "SELECT fecha, fecha_atencion FROM registros "
-            "WHERE tipo_actividad = 'Actividad nueva'"
-        ).fetchone()
-        con.close()
+        filas = consultar(db, "SELECT fecha, fecha_atencion FROM registros"
+                          " WHERE tipo_actividad = ?", ("Actividad nueva",))
+        assert filas, "el registro deberia haberse guardado"
+        fecha, fecha_atencion = filas[0]
 
-        assert fila is not None, "el registro deberia haberse guardado"
-        assert fila[1] == "2026-10-09"
-        assert fila[0].startswith("2026-10-09"), \
-            f"FECHA debe acompanar a la atencion, no {fila[0]}"
+        assert fecha_atencion == "2026-10-09"
+        assert str(fecha).startswith("2026-10-09"), \
+            f"FECHA debe acompanar a la atencion, no {fecha}"
 
     def test_una_fecha_invalida_no_se_acepta_como_atencion(self, db):
         """La fecha se normaliza; un valor imposible se descarta."""
@@ -68,13 +65,12 @@ class TestEdicionDeRegistro:
         """Al editar, FECHA debe seguir a FECHA ATENCION."""
         registrar(fecha="2026-09-20 08:00:00", fecha_atencion="2026-09-25")
 
-        import sqlite3
-        con = sqlite3.connect(db.DB_FILE)
-        id_registro = con.execute("SELECT id FROM registros LIMIT 1").fetchone()[0]
-        con.close()
+        filas = consultar(db, "SELECT id FROM registros")
+        assert filas, "no se registro la actividad de prueba"
+        id_registro = filas[0][0]
 
         iniciar_sesion()
-        cliente.post("/actualizar_registro_accion", data={
+        respuesta = cliente.post("/actualizar_registro_accion", data={
             "id_registro": str(id_registro),
             "actividad": "Actividad de prueba",
             "ubicacion": "Dependencia",
@@ -87,16 +83,17 @@ class TestEdicionDeRegistro:
             "csrf_token": token_csrf(),
         })
 
-        con = sqlite3.connect(db.DB_FILE)
-        fila = con.execute(
-            "SELECT fecha, fecha_atencion FROM registros WHERE id = ?",
-            (id_registro,),
-        ).fetchone()
-        con.close()
+        resultado = consultar(db, "SELECT fecha, fecha_atencion FROM registros"
+                              " WHERE id = ?", (id_registro,))
+        fecha, fecha_atencion = resultado[0]
 
-        assert fila[1] == "2026-10-05"
-        assert fila[0].startswith("2026-10-05"), \
-            f"tras editar, ambas fechas deben coincidir: {fila}"
+        # Si el guardado no ocurrio, el aviso lo dira claro.
+        assert "error" not in respuesta.headers.get("Location", ""), \
+            f"la edicion fue rechazada: {respuesta.headers.get('Location')}"
+
+        assert fecha_atencion == "2026-10-05"
+        assert str(fecha).startswith("2026-10-05"), \
+            f"tras editar, ambas fechas deben coincidir: {fecha}"
 
     def test_la_hora_se_actualiza_al_editar(self, cliente, iniciar_sesion,
                                             token_csrf, registrar, db):
@@ -108,13 +105,11 @@ class TestEdicionDeRegistro:
         """
         registrar(fecha="2026-09-20 08:30:45", fecha_atencion="2026-09-25")
 
-        import sqlite3
-        con = sqlite3.connect(db.DB_FILE)
-        id_registro = con.execute("SELECT id FROM registros LIMIT 1").fetchone()[0]
-        con.close()
+        filas = consultar(db, "SELECT id FROM registros")
+        id_registro = filas[0][0]
 
         iniciar_sesion()
-        cliente.post("/actualizar_registro_accion", data={
+        respuesta = cliente.post("/actualizar_registro_accion", data={
             "id_registro": str(id_registro),
             "actividad": "Actividad de prueba",
             "ubicacion": "Dependencia",
@@ -127,18 +122,19 @@ class TestEdicionDeRegistro:
             "csrf_token": token_csrf(),
         })
 
-        con = sqlite3.connect(db.DB_FILE)
-        fila = con.execute(
-            "SELECT fecha, fecha_atencion FROM registros WHERE id = ?",
-            (id_registro,),
-        ).fetchone()
-        con.close()
+        resultado = consultar(db, "SELECT fecha, fecha_atencion FROM registros"
+                              " WHERE id = ?", (id_registro,))
+        fecha, fecha_atencion = resultado[0]
+        fecha = str(fecha)
 
-        assert fila[1] == "2026-10-05"
-        assert fila[0][:10] == "2026-10-05"
+        assert "error" not in respuesta.headers.get("Location", ""), \
+            f"la edicion fue rechazada: {respuesta.headers.get('Location')}"
+
+        assert fecha_atencion == "2026-10-05"
+        assert fecha[:10] == "2026-10-05"
         # La hora debe tener formato HH:MM:SS y ser la del guardado, no la vieja.
-        assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", fila[0])
-        assert not fila[0].endswith("08:30:45"), \
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", fecha)
+        assert not fecha.endswith("08:30:45"), \
             "la hora debe ser la del momento de editar, no la original"
 
 
@@ -178,16 +174,14 @@ class TestFiltroPorFechaDeAtencion:
 
     def test_sin_atencion_se_usa_la_fecha_de_solicitud(self, db):
         """Si falta la fecha de atencion, el registro no debe desaparecer."""
-        import sqlite3
-        with db.db_session() as conn:
-            conn.execute(
-                """INSERT INTO registros
-                   (usuario, tipo_actividad, fecha, dependencia, solicitante,
-                    tipo_solicitud, medio_solicitud, descripcion, cumplido,
-                    fecha_atencion, observaciones, borrado)
-                   VALUES ('tester','Sin atencion','2026-09-12 08:00:00','D','S',
-                           'A','E','D','Sí','','O',0)"""
-            )
+        ejecutar(db,
+            """INSERT INTO registros
+               (usuario, tipo_actividad, fecha, dependencia, solicitante,
+                tipo_solicitud, medio_solicitud, descripcion, cumplido,
+                fecha_atencion, observaciones, borrado)
+               VALUES ('tester','Sin atencion','2026-09-12 08:00:00','D','S',
+                       'A','E','D','Sí','','O',0)"""
+        )
         df, _ = exportar_registros_filtrados(
             fecha_inicio="2026-09-10", fecha_fin="2026-09-20"
         )

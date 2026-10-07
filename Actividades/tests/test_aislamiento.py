@@ -15,6 +15,7 @@ Que se verifica
 """
 
 import os
+import pytest
 import sqlite3
 from pathlib import Path
 
@@ -38,12 +39,23 @@ class TestAislamiento:
             "sin esto la app podria mezclar la base de datos de la red"
 
     def test_la_base_esta_en_un_directorio_temporal(self, db):
-        ruta = Path(db.DB_FILE).resolve()
+        """Con SQLite la ruta del archivo debe estar en la carpeta temporal.
+
+        Con PostgreSQL no hay archivo: se comprueba que la carpeta de datos local
+        siga siendo temporal (la base real ya la cubre la regla de la URL).
+        """
+        from tests.conftest import usando_postgresql_real
+
         temporal = Path(os.environ["ACTIVIDADES_CENTRAL_DIR"]).resolve()
+        assert "TEMP" in str(temporal).upper() or "TMP" in str(temporal).upper(), \
+            f"la carpeta de datos debe ser temporal: {temporal}"
+
+        if usando_postgresql_real():
+            return
+
+        ruta = Path(db.DB_FILE).resolve()
         assert ruta.parent == temporal, \
             f"la base debe estar en {temporal}, no en {ruta.parent}"
-        assert "TEMP" in str(ruta).upper() or "TMP" in str(ruta).upper(), \
-            f"la base deberia estar en una carpeta temporal: {ruta}"
 
     def test_la_url_de_postgresql_debe_ser_local(self):
         """Comprueba el candado: una URL no local debe rechazarse.
@@ -79,12 +91,23 @@ class TestAislamiento:
         assert "TEMP" in str(datos).upper() or "TMP" in str(datos).upper()
 
     def test_las_tablas_existen(self, db):
-        with db.db_session() as conn:
-            tablas = {
-                fila[0] for fila in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
+        from tests.conftest import usando_postgresql_real
+
+        if usando_postgresql_real():
+            with db.db_session() as conn:
+                cursor = db.get_cursor(conn)
+                cursor.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public'"
                 )
-            }
+                # Con PostgreSQL la fila es un diccionario: se lee por nombre.
+                tablas = {f["table_name"] for f in cursor.fetchall()}
+        else:
+            with db.db_session() as conn:
+                cursor = db.get_cursor(conn)
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tablas = {f["name"] for f in cursor.fetchall()}
+
         for esperada in ("usuarios", "registros", "sesiones", "bitacora"):
             assert esperada in tablas, f"falta la tabla {esperada}"
 
@@ -117,6 +140,11 @@ class TestLasBasesRealesNoSeModifican:
         """Las bases reales conservan sus datos (solo lectura, sobre una copia)."""
         import shutil
         import tempfile
+
+        from tests.conftest import usando_postgresql_real
+
+        if usando_postgresql_real():
+            pytest.skip("sin archivo SQLite en juego cuando se usa PostgreSQL")
 
         # La base que usa la suite es la temporal: eso ya lo verifican otras
         # pruebas. Aqui solo se comprueba que las reales siguen con datos.

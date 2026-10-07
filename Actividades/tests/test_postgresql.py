@@ -2,7 +2,20 @@
 
 Esta es la capa que mas valor ha dado: atrapa los errores que solo aparecen en
 Render porque la base de produccion es PostgreSQL y la del equipo es SQLite.
+
+Cuando las pruebas ya se ejecutan contra un PostgreSQL real (integracion
+continua), el simulador sobra y se omiten: en ese escenario ya se prueba el
+motor de verdad.
 """
+
+import pytest
+
+from tests.conftest import usando_postgresql_real
+
+pytestmark = pytest.mark.skipif(
+    usando_postgresql_real(),
+    reason="ya se ejecuta contra un PostgreSQL real: el simulador no aplica",
+)
 
 
 class TestFormaDeLasFilas:

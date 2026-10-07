@@ -75,6 +75,12 @@ os.environ["TRUST_PROXY"] = "false"
 os.environ.pop("RENDER", None)
 os.environ.pop("FLASK_SECRET_KEY", None)
 
+if _USAR_POSTGRESQL:
+    # Con base de datos configurada la app exige una clave de sesion. Se define
+    # despues de borrarla arriba, porque si no se perderia. Es una clave
+    # desechable: la base es un contenedor efimero de pruebas.
+    os.environ["FLASK_SECRET_KEY"] = "clave-desechable-solo-para-pruebas"
+
 
 # --- 2. Fixtures compartidos ------------------------------------------------
 
@@ -104,6 +110,39 @@ def modulo_app(db):
     return modulo
 
 
+def ejecutar(db, sentencia, parametros=()):
+    """Ejecuta SQL funciona igual en SQLite y en PostgreSQL.
+
+    No se puede usar ``conn.execute(...)``: la conexion de psycopg2 no tiene ese
+    metodo. Hay que pasar por ``get_cursor``, que es lo que hace la aplicacion.
+    """
+    with db.db_session() as conn:
+        cursor = db.get_cursor(conn)
+        cursor.execute(db.fix_query(sentencia), parametros)
+
+
+def consultar(db, sentencia, parametros=()):
+    """Devuelve las filas como tuplas, sin depender del motor.
+
+    Con PostgreSQL las filas son diccionarios, y ``fila[0]`` lanzaria
+    ``KeyError``. Por eso se convierten a tupla por nombre de columna, con la
+    misma precaution que se aplico en ``registrar_sesion``.
+    """
+    with db.db_session() as conn:
+        cursor = db.get_cursor(conn)
+        cursor.execute(db.fix_query(sentencia), parametros)
+        filas = cursor.fetchall()
+        if filas and isinstance(filas[0], dict):
+            columnas = list(filas[0].keys())
+            return [tuple(f[c] for c in columnas) for f in filas]
+        return [tuple(f) for f in filas]
+
+
+def usando_postgresql_real():
+    """True si las pruebas se estan ejecutando contra un PostgreSQL real."""
+    return os.environ.get("ACTIVIDADES_TEST_PG", "") in ("1", "true", "yes")
+
+
 @pytest.fixture(autouse=True)
 def datos_limpios(db, modulo_app):
     """Vacia las tablas de negocio antes de cada prueba.
@@ -114,9 +153,8 @@ def datos_limpios(db, modulo_app):
 
     No toca usuarios ni configuracion: cada prueba define los que necesita.
     """
-    with db.db_session() as conn:
-        conn.execute("DELETE FROM registros")
-        conn.execute("DELETE FROM sesiones")
+    ejecutar(db, "DELETE FROM registros")
+    ejecutar(db, "DELETE FROM sesiones")
     assert db.cargar_registros(None).empty, "la limpieza no dejo registros"
     yield
 
@@ -255,17 +293,16 @@ def registrar(db):
                    medio_solicitud="Email", descripcion="Descripcion",
                    cumplido="Sí", dependencia="Dependencia",
                    observaciones="Observaciones"):
-        with db.db_session() as conn:
-            conn.execute(
-                """INSERT INTO registros
-                   (usuario, tipo_actividad, fecha, dependencia, solicitante,
-                    tipo_solicitud, medio_solicitud, descripcion, cumplido,
-                    fecha_atencion, observaciones, borrado)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
-                (usuario, actividad, fecha, dependencia, solicitante,
-                 tipo_solicitud, medio_solicitud, descripcion, cumplido,
-                 fecha_atencion, observaciones),
-            )
+        ejecutar(db,
+            """INSERT INTO registros
+               (usuario, tipo_actividad, fecha, dependencia, solicitante,
+                tipo_solicitud, medio_solicitud, descripcion, cumplido,
+                fecha_atencion, observaciones, borrado)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
+            (usuario, actividad, fecha, dependencia, solicitante,
+             tipo_solicitud, medio_solicitud, descripcion, cumplido,
+             fecha_atencion, observaciones),
+        )
         return True
 
     return _registrar

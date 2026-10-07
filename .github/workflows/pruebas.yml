@@ -7,8 +7,8 @@ name: Pruebas
 #   y macOS, sin instalar nada.
 # Capa 2 (postgres): PostgreSQL real de verdad, como el de produccion. Es la
 #   que detecta problemas de sintaxis o de tipos que el simulador no puede
-#   reproducir. Arranca marcada como no bloqueante (continue-on-error) porque
-#   es nueva; cuando este en verde se puede quitar esa marca.
+#   reproducir. Ambas capas se verificaron en verde contra un PostgreSQL local
+#   antes de activar esta marca bloqueante.
 
 on:
   push:
@@ -55,9 +55,6 @@ jobs:
   postgres:
     name: Pruebas (PostgreSQL real)
     runs-on: ubuntu-latest
-    # Capa nueva: reporta problemas sin bloquear el flujo. Quitar
-    # continue-on-error cuando se confirme que pasa de forma estable.
-    continue-on-error: true
 
     services:
       postgres:
