@@ -1581,9 +1581,6 @@ def exportar():
     if df.empty:
         return redirect(url_for('exportar', error='No hay datos para exportar'))
 
-    # La columna de trabajo del filtro no debe aparecer en los archivos finales.
-    df = df.drop(columns=['_FECHA_FILTRO'], errors='ignore')
-
     tmp_path = None
     try:
         suffix = '.xlsx' if formato == 'excel' else '.csv'
@@ -1602,7 +1599,12 @@ def exportar():
             filename = f"Informe_{tipo_reporte}_{usuario_actual}_{datetime.now().strftime('%Y%m%d')}.xlsx"
             mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         else:
-            preparar_dataframe_exportable(df).to_csv(
+            # En el CSV la columna de trabajo del filtro no debe aparecer. En el
+            # Excel si se necesita: de ella se calcula el rango de fechas que
+            # encabezado del informe.
+            preparar_dataframe_exportable(
+                df.drop(columns=['_FECHA_FILTRO'], errors='ignore')
+            ).to_csv(
                 tmp_path, index=False, encoding='utf-8-sig'
             )
             filename = f"exportacion_{usuario_actual}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"

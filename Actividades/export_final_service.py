@@ -6,7 +6,7 @@ from datetime import datetime
 from config import TEMPLATE_INFORME_FINAL, logger
 import unicodedata
 from utils import medir_tiempo
-from export_service import _neutralizar_formula
+from export_service import _neutralizar_formula, _rango_fechas_texto
 
 @medir_tiempo
 def generar_informe_final_resumen(df, output_path, contrato_data=None, usuario=None):
@@ -80,17 +80,7 @@ def generar_informe_final_resumen(df, output_path, contrato_data=None, usuario=N
             hoy = datetime.now()
             vals['FECHA_HOY'] = hoy.strftime('%d/%m/%Y')
             
-            rango = 'N/A'
-            try:
-                # Rango sobre la fecha de atención, igual que el filtro del reporte.
-                columna_rango = (
-                    '_FECHA_FILTRO' if '_FECHA_FILTRO' in df.columns else 'FECHA'
-                )
-                if not df.empty and columna_rango in df.columns:
-                    fechas_dt = pd.to_datetime(df[columna_rango], errors='coerce').dropna()
-                    if not fechas_dt.empty:
-                        rango = f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}"
-            except Exception: pass
+            rango = _rango_fechas_texto(df, vacio='N/A')
             vals['RANGO_FECHAS'] = rango
             return vals
 

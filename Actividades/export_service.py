@@ -114,6 +114,33 @@ def _calcular_estadisticas(df):
     return stats
 
 
+def _columna_fecha_reporte(df):
+    """Devuelve la columna de fecha que debe usarse para el rango del informe.
+
+    Prioridad: la columna de trabajo del filtro, luego FECHA ATENCIÓN y por
+    último FECHA. Con el respaldo, quitar la columna auxiliar antes de generar
+    el Excel ya no deja el encabezado de fechas vacío.
+    """
+    for col in ('_FECHA_FILTRO', 'FECHA ATENCIÓN', 'FECHA'):
+        if col in df.columns:
+            return col
+    return None
+
+
+def _rango_fechas_texto(df, formato='%d/%m/%Y', vacio=''):
+    """Texto 'dd/mm/yyyy al dd/mm/yyyy' con el rango real de las actividades."""
+    col = _columna_fecha_reporte(df)
+    if col is None or df.empty:
+        return vacio
+    try:
+        fechas = pd.to_datetime(df[col], errors='coerce').dropna()
+        if fechas.empty:
+            return vacio
+        return f"{fechas.min().strftime(formato)} al {fechas.max().strftime(formato)}"
+    except Exception:
+        return vacio
+
+
 def _format_fecha(df, func):
     """Formatea fecha min/max de un DataFrame"""
     if 'FECHA' not in df.columns or df['FECHA'].empty:
@@ -354,14 +381,7 @@ def generar_informe_template(df, output_path, contrato_data=None):
                             nombre = 'VARIOS'
 
             # Rango de fechas (sobre la fecha de atención, igual que el filtro)
-            rango = ''
-            try:
-                if not df.empty and '_FECHA_FILTRO' in df.columns:
-                    fechas_dt = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce').dropna()
-                    if not fechas_dt.empty:
-                        rango = f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}"
-            except Exception:
-                rango = ''
+            rango = _rango_fechas_texto(df)
 
             vals['NRO_CONTRATO'] = str(nro).upper() if nro else ''
             vals['OBJETO'] = str(objeto).upper() if objeto else ''
@@ -459,13 +479,11 @@ def generar_informe_template(df, output_path, contrato_data=None):
 
  
 
-        # Rango de fechas (Fila 6) - Mantener si es necesario o mover al final
-        if not df.empty and '_FECHA_FILTRO' in df.columns:
-            fechas_dt = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce').dropna()
-            if not fechas_dt.empty:
-                ws.cell(row=6, column=3,
-                        value=f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}")
-                ws.merge_cells(start_row=6, start_column=3, end_row=6, end_column=10) # Unificar ancho de fechas
+        # Rango de fechas (Fila 6)
+        rango_fila6 = _rango_fechas_texto(df)
+        if rango_fila6:
+            ws.cell(row=6, column=3, value=rango_fila6)
+            ws.merge_cells(start_row=6, start_column=3, end_row=6, end_column=10) # Unificar ancho de fechas
         
         # Guardar estilos base de fila 8
         base_styles = []
@@ -655,10 +673,7 @@ def analizar_plantilla_contrato(df=None, contrato_data=None, output_json_path=No
             'RANGO_FECHAS': ''
         }
         try:
-            if not df.empty and '_FECHA_FILTRO' in df.columns:
-                fechas_dt = pd.to_datetime(df['_FECHA_FILTRO'], errors='coerce').dropna()
-                if not fechas_dt.empty:
-                    contrato_values['RANGO_FECHAS'] = f"{fechas_dt.min().strftime('%d/%m/%Y')} al {fechas_dt.max().strftime('%d/%m/%Y')}"
+            contrato_values['RANGO_FECHAS'] = _rango_fechas_texto(df)
         except Exception:
             pass
         wb = openpyxl.load_workbook(TEMPLATE_EXCEL)
