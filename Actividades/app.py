@@ -10,6 +10,7 @@ Despliegue: gunicorn app:app (ver render.yaml / Procfile)
 from flask import Flask, request, redirect, url_for, session, render_template_string, send_file
 from werkzeug.middleware.proxy_fix import ProxyFix
 import os
+import io
 import json
 import html
 import re
@@ -19,6 +20,11 @@ from datetime import datetime
 from functools import wraps
 
 from config import logger
+from actividades_pendientes_service import (
+    generar_excel_pendientes,
+    leer_archivo_pendientes,
+    guardar_registros_pendientes,
+)
 from database import (
     cargar_usuarios, guardar_usuarios,
     cargar_actividades, cargar_actividades_globales, guardar_actividades,
@@ -702,6 +708,117 @@ def descargar_respaldo():
     except Exception:
         logger.exception("Error generando respaldo completo")
         return redirect(url_for('gestion', error='No se pudo generar el respaldo'))
+
+
+# =============================================================================
+# ACTIVIDADES PENDIENTES (Excel por usuario)
+# =============================================================================
+
+@app.route('/descargar_actividades_pendientes', methods=['GET'])
+@login_required
+@cambio_requerido
+def descargar_actividades_pendientes():
+    """Descarga el Excel con las actividades que al usuario le faltan.
+
+    El archivo se arma para el usuario de la sesion. Cada fila trae la actividad
+    ya escrita; la persona solo completa los datos de la labor.
+    """
+    usuario = session.get('usuario')
+    try:
+        contenido = generar_excel_pendientes(usuario)
+    except Exception:
+        logger.exception("Error generando actividades pendientes")
+        return redirect(url_for('index', error='No se pudo generar la plantilla'))
+
+    if contenido is None:
+        return redirect(url_for('index', error='No se pudo generar la plantilla'))
+
+    nombre = f"actividades_pendientes_{usuario}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return send_file(
+        io.BytesIO(contenido),
+        as_attachment=True,
+        download_name=nombre,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route('/importar_mis_actividades', methods=['POST'])
+@login_required
+@cambio_requerido
+@csrf_protect
+def importar_mis_actividades():
+    """Sube el Excel de actividades pendientes que lleno el usuario.
+
+    Los registros se atribuyen siempre al usuario de la sesion: la columna
+    USUARIO del archivo se ignora a proposito, para que nadie registre labor
+    ajena.
+    """
+    usuario = session.get('usuario')
+    ip = _ip_cliente()
+
+    if usuario == 'admin':
+        return redirect(url_for('index', error='El administrador no registra actividades'))
+
+    archivo = request.files.get('archivo')
+    if not archivo or not archivo.filename:
+        return redirect(url_for('index', error='Seleccione el archivo de actividades'))
+
+    if not archivo.filename.lower().endswith('.xlsx'):
+        return redirect(url_for('index', error='El archivo debe ser .xlsx'))
+
+    ruta_temporal = None
+    try:
+        descriptor, ruta_temporal = tempfile.mkstemp(suffix='.xlsx')
+        os.close(descriptor)
+        archivo.save(ruta_temporal)
+
+        if os.path.getsize(ruta_temporal) == 0:
+            return redirect(url_for('index', error='El archivo está vacío'))
+
+        lectura = leer_archivo_pendientes(ruta_temporal, usuario)
+        if lectura.problemas and not lectura.validas:
+            return redirect(url_for('index', error=(
+                'No se encontró ningún registro válido. '
+                + lectura.resumen_texto()
+            )))
+
+        resultado = guardar_registros_pendientes(usuario, lectura.validas)
+        registrar_auditoria(
+            usuario,
+            "IMPORTAR_ACTIVIDADES_PROPIAS",
+            f"Guardados: {resultado['guardados']}; descartados: {len(lectura.descartadas)}",
+            ip,
+        )
+
+        if resultado['errores']:
+            return redirect(url_for('index', error=(
+                f"Se guardaron {resultado['guardados']} de {len(lectura.validas)}. "
+                + "; ".join(resultado['errores'][:3])
+            )))
+
+        if lectura.descartadas:
+            return redirect(url_for('index', msg=(
+                f"Se guardaron {resultado['guardados']} actividades. "
+                f"{len(lectura.descartadas)} fila(s) se descartaron: "
+                + "; ".join(lectura.problemas[:3])
+            )))
+
+        if resultado['guardados'] == 0:
+            return redirect(url_for('index', msg='No había registros nuevos en el archivo'))
+
+        return redirect(url_for('index', success=f'subidas_{resultado["guardados"]}'))
+
+    except ValueError as exc:
+        return redirect(url_for('index', error=str(exc)))
+    except Exception:
+        logger.exception("Error importando actividades propias")
+        return redirect(url_for('index', error='No se pudo leer el archivo de actividades'))
+    finally:
+        if ruta_temporal and os.path.exists(ruta_temporal):
+            try:
+                os.remove(ruta_temporal)
+            except Exception:
+                pass
 
 
 @app.route('/agregar_registro', methods=['POST'])

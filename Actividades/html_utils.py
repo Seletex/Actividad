@@ -272,6 +272,29 @@ def generar_gestion_actividades_personales(usuario_actual):
         contenido = f"""
         <div class="mb-4">
             <h6 class="text-uppercase text-muted fw-bold mb-3 small">✨ Mis Actividades Propias</h6>
+            <div class="card mb-4 border-info">
+                <div class="card-header bg-info bg-gradient text-white">
+                  <h6 class="mb-0"><i class="fas fa-file-excel me-2"></i> Registrar varias actividades de una vez</h6>
+                </div>
+                <div class="card-body">
+                  <p class="text-muted small mb-3">
+                    Descarga el Excel con las actividades de tu contrato que a&uacute;n no
+                    tienen registro, ll&eacute;nalas y vuelve a subirlo. Se guardan todas
+                    juntas, con tu usuario.
+                  </p>
+                  <a href="/descargar_actividades_pendientes" class="btn btn-outline-info btn-sm me-2">
+                    <i class="fas fa-download me-1"></i> Descargar Excel con mis pendientes
+                  </a>
+                  <form action="/importar_mis_actividades" method="POST" enctype="multipart/form-data"
+                        class="d-inline">
+                    <input type="file" name="archivo" accept=".xlsx" required
+                           class="form-control form-control-sm d-inline-block w-auto me-2">
+                    <button type="submit" class="btn btn-info btn-sm">
+                      <i class="fas fa-upload me-1"></i> Subir Excel llenado
+                    </button>
+                  </form>
+                </div>
+              </div>
             <form action="/agregar_actividad_personal" method="POST" class="row g-2 mb-4">
                 <input type="hidden" name="usuario" value="{_html.escape(str(usuario_actual), quote=True)}">
                 <div class="col-md-9">
@@ -279,7 +302,7 @@ def generar_gestion_actividades_personales(usuario_actual):
                            placeholder="Agrega algo específico de tu cargo..." class="form-control" required>
                 </div>
                 <div class="col-md-3">
-                    <button type="submit" class="btn btn-outline-primary w-100">Añadir</button>
+                    <button type="submit" class="btn btn-outline-primary w-100">A&ntilde;adir</button>
                 </div>
             </form>
             <div class="list-group shadow-sm rounded-3">
