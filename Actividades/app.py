@@ -394,6 +394,101 @@ def _html_importacion(usuario_actual):
     """
 
 
+def _es_error_de_base_datos(error):
+    """Distingue un fallo de conexión de un error de la aplicación."""
+    modulo = type(error).__module__ or ""
+    nombre = type(error).__name__ or ""
+    if modulo.startswith("psycopg2"):
+        return True
+    if modulo.startswith("sqlite3") and "Error" in nombre:
+        return True
+    return False
+
+
+_PAGINA_SERVICIO_CAIDO = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Servicio no disponible - Sistema de Actividades</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .aviso { width: 100%; max-width: 520px; margin: 20px; background: white;
+                 padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="aviso">
+            <h4 class="text-center mb-3">⚠️ Servicio temporalmente no disponible</h4>
+            <p class="text-center mb-4">
+                No se pudo comunicar con la base de datos de la aplicación.
+                <strong>Sus datos no se han perdido ni modificado.</strong>
+            </p>
+            <p class="text-center text-muted small mb-0">
+                Espere unos minutos y vuelva a intentar. Si el problema continúa,
+                avise al administrador de sistemas.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+
+@app.errorhandler(Exception)
+def _manejar_error_inesperado(error):
+    """Ante un fallo de base de datos se muestra un aviso, no un error 500.
+
+    Sin esto, una caída de la base aparecía como un error técnico sin
+    explicación, que es lo que hizo tan difícil entender la caída de octubre.
+    """
+    from werkzeug.exceptions import HTTPException
+
+    if isinstance(error, HTTPException):
+        return error
+    if _es_error_de_base_datos(error):
+        logger.error("Fallo de base de datos atendiendo una petición: %s", error)
+        return _PAGINA_SERVICIO_CAIDO, 503
+    logger.exception("Error no controlado")
+    return "Error interno del servidor", 500
+
+
+@app.route('/salud', methods=['GET'])
+def salud():
+    """Estado del servicio y de la base de datos, sin información sensible.
+
+    Sirve para confirmar en un vistazo si la aplicación está viva y si la
+    base de datos responde. Devuelve 503 cuando la base no está disponible.
+    """
+    estado = {
+        "servicio": "ok",
+        "base_datos": "ok",
+        "registros": 0,
+    }
+    codigo = 200
+    try:
+        from database import get_db_connection, get_cursor
+        conn = get_db_connection()
+        try:
+            cursor = get_cursor(conn)
+            cursor.execute("SELECT COUNT(*) AS total FROM registros")
+            fila = cursor.fetchone()
+            estado["registros"] = int(fila["total"]) if fila else 0
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.error("Comprobación de salud fallida: %s", exc)
+        estado["servicio"] = "degradado"
+        estado["base_datos"] = "no disponible"
+        codigo = 503
+    respuesta = json.dumps(estado, ensure_ascii=False)
+    return respuesta, codigo, {"Content-Type": "application/json; charset=utf-8"}
+
+
 @app.route('/listado', methods=['GET'])
 @login_required
 @cambio_requerido
@@ -871,6 +966,18 @@ def login():
 
     ok, info = verificar_credenciales(usuario, contrasena)
     if not ok:
+        # Si la base de datos está caída no es un error del usuario:
+        # no se cuenta como intento fallido (evita bloquear su IP) y el
+        # mensaje debe señalar el problema real del servicio.
+        if info == 'error_bd':
+            logger.error("Login no verificable: base de datos no disponible (%s)", ip)
+            return redirect(
+                url_for(
+                    'index',
+                    error='El servicio está temporalmente fuera de servicio '
+                          '(problema de base de datos). Intente en unos minutos.',
+                )
+            )
         registrar_intento_fallido(ip)
         registrar_auditoria(usuario, "LOGIN_FALLIDO", f"Motivo: {info}", ip)
         if info == 'usuario_inexistente':
@@ -1758,6 +1865,13 @@ def _csrf_ok():
 # =============================================================================
 
 def initialize_app():
+    """Prepara la aplicación para atender peticiones.
+
+    Si la base de datos no está disponible no se aborta el arranque: es
+    preferible que la aplicación levante y muestre un aviso claro a que el
+    servicio aparezca caído sin explicación (que fue lo que pasó cuando Render
+    eliminó la base PostgreSQL gratuita).
+    """
     try:
         from database import inicializar_usuarios, inicializar_config, inicializar_excel
         with app.app_context():
@@ -1770,8 +1884,10 @@ def initialize_app():
             purgar_sesiones_antiguas(horas=24)
         logger.info("Aplicación inicializada correctamente (Usuarios, Config, Excel)")
     except Exception:
-        logger.exception("Error durante la inicialización")
-        raise
+        logger.exception(
+            "La aplicación arrancó sin inicializar la base de datos. "
+            "Seguirá funcionando y avisará cuando la base vuelva."
+        )
 
 
 initialize_app()

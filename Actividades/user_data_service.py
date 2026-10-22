@@ -144,15 +144,32 @@ def sincronizar_datos_usuarios(ruta_seleccionada=None):
     usuarios = [str(u).strip() for u in datos.get("usuarios", []) if str(u).strip()]
     actividades = datos.get("actividades", {}) or {}
     configuraciones = datos.get("configuraciones", {}) or {}
-    listas = {}
-    ruta_config = _archivo_configuracion()
-    if ruta_config:
-        try:
-            with open(ruta_config, "r", encoding="utf-8") as archivo:
-                listas = json.load(archivo) or {}
-        except (OSError, json.JSONDecodeError):
-            logger.exception("No se pudo leer config_actividades.json")
-            listas = {}
+
+    # Las listas globales pueden venir dentro del propio JSON subido (por
+    # ejemplo, el "usuarios.json" de un respaldo completo) o desde el archivo
+    # de configuración del servidor. Antes solo se leían del servidor, lo que
+    # hacía que una restauración desde el navegador perdiera los catálogos.
+    listas = datos.get("listas_globales") or datos.get("listas") or {}
+    if isinstance(actividades, list):
+        # El archivo subido es un "listas_globales.json": sus claves son los
+        # catalogos globales, no las actividades personales de cada usuario.
+        listas = dict(listas) if isinstance(listas, dict) else {}
+        for clave in (
+            "actividades", "ubicaciones", "dependencias",
+            "tipos_solicitud", "medios_solicitud",
+        ):
+            if isinstance(datos.get(clave), list):
+                listas[clave] = datos[clave]
+        actividades = {}
+    if not listas:
+        ruta_config = _archivo_configuracion()
+        if ruta_config:
+            try:
+                with open(ruta_config, "r", encoding="utf-8") as archivo:
+                    listas = json.load(archivo) or {}
+            except (OSError, json.JSONDecodeError):
+                logger.exception("No se pudo leer config_actividades.json")
+                listas = {}
     respaldos = {}
     resumen = {
         "usuarios_nuevos": 0,
@@ -256,15 +273,20 @@ def sincronizar_datos_usuarios(ruta_seleccionada=None):
                 resumen["configuraciones"] += max(0, cursor.rowcount)
 
         mapping_listas = {
-            "actividades": "actividad",
-            "dependencias": "ubicacion",
-            "tipos_solicitud": "tipo_solicitud",
-            "medios_solicitud": "medio_solicitud",
+            "actividades": ("actividad", ("actividades", "actividad")),
+            "dependencias": ("ubicacion", ("dependencias", "ubicaciones")),
+            "tipos_solicitud": ("tipo_solicitud", ("tipos_solicitud",)),
+            "medios_solicitud": ("medio_solicitud", ("medios_solicitud",)),
         }
-        for clave, tipo in mapping_listas.items():
-            valores = listas.get(clave, [])
-            if not isinstance(valores, list):
-                continue
+        for clave, (tipo, alias) in mapping_listas.items():
+            # Se aceptan los dos nombres: el archivo del servidor usa
+            # "dependencias" y el respaldo generado por la aplicación usa
+            # "ubicaciones". Con un solo nombre, el catálogo se perdía.
+            valores = []
+            for nombre in alias:
+                candidato = listas.get(nombre)
+                if isinstance(candidato, list):
+                    valores.extend(candidato)
             for valor in valores:
                 valor = str(valor).strip()
                 if not valor:

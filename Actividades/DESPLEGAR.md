@@ -26,10 +26,16 @@ git commit -m "Flujo admin asigna contrasena + scripts de despliegue"
 
 ## 2. Crear la base de datos PostgreSQL en Render
 
+> ⚠️ **Importante:** el plan **Free** de Render **caduca a los 30 días** y
+> Render elimina la base con todos sus datos, sin conservar copia. Para un
+> servicio en producción usa el plan **Starter** (desde 7 USD/mes), que incluye
+> respaldos automáticos. Si la base ya se eliminó y hay que recuperarla, sigue
+> la guía **[RECUPERAR.md](RECUPERAR.md)**.
+
 1. Inicia sesión en Render y entra en el panel.
 2. Crea una **PostgreSQL** (Database):
    - Nombre: `actividades-db`
-   - **Plan: Free** (ROI de prueba).
+   - **Plan: Starter** (recomendado) o *Free* solo para pruebas de pocos días.
 3. Cuando se cree, Render te mostrará la **Connection String** (Internal
    Database URL). **Cópiala y guárdala**, la necesitarás para subir datos
    (paso opcional 5). Se ve así:
@@ -173,3 +179,8 @@ Opciones:
 | Configurar admin (local) | `python setup_admin.py` |
 | Configurar admin (web) | `set DATABASE_URL=<url>` + `python setup_admin.py` |
 | Subir datos a la web | `set DATABASE_URL=<url>` + `python sync_db_to_postgres.py` |
+| **Restaurar todo tras perder la base** | `python restaurar_produccion.py --url <url> --local "%LOCALAPPDATA%\ActividadesData\actividades.db"` |
+| **Respaldo automático diario** | `python respaldar_automatico.py --url <url> --destino <carpeta>` |
+
+> Si la base de datos de Render se eliminó o dejó de responder, la guía
+> completa de recuperación está en **[RECUPERAR.md](RECUPERAR.md)**.

@@ -638,8 +638,11 @@ def verificar_credenciales(usuario, contrasena):
             "debe_cambiar": bool(row["debe_cambiar_contrasena"]),
         }
     except Exception:
+        # La base de datos no está disponible (caída, red o credenciales).
+        # NO es un error de contraseña: se distingue para no engañar al
+        # usuario ni contar su intento como fallido.
         logger.exception("Error verificando credenciales")
-        return False, "error"
+        return False, "error_bd"
 
 
 def establecer_contrasena(usuario, contrasena, limpiar_debe_cambiar=True):

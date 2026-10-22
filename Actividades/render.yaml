@@ -20,4 +20,8 @@ services:
 
 databases:
   - name: actividades-db
-    plan: free
+    # El plan "free" de Render caduca a los 30 dias y Render elimina la base
+    # con todos sus datos, sin conservar copia. Ya se perdio la base de este
+    # proyecto por esa causa (22/09/2026 - 22/10/2026). El plan "starter"
+    # no caduca e incluye respaldos automaticos.
+    plan: starter
