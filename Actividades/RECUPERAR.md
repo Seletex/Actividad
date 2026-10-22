@@ -110,6 +110,9 @@ todo haya quedado bien.
 
 1. En Render, base nueva → **Info** → copia la **External Database URL**
    (empieza por `postgresql://...@dpg-...-a.oregon-postgres.render.com/...`).
+   > La URL externa termina en `?sslmode=require`. **Déjelo así**: es lo que
+   > Render exige para las conexiones que llegan desde fuera de Render y
+   > mantiene el tráfico cifrado. No lo borre.
 2. Abre **PowerShell** en la carpeta `Actividades` del proyecto y ejecuta:
 
 ```powershell
