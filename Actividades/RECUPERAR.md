@@ -1,9 +1,10 @@
 # Recuperar la aplicación después de la caída de la base de datos
 
 > **Resumen en una línea:** la base de datos PostgreSQL gratuita de Render
-> **cumplió 30 días y Render la eliminó por completo**, sin guardar copia.
-> Nadie felló ninguna contraseña: la base ya no existía. Hay que crear una
-> base nueva y volver a cargar los datos.
+> **cumplió 30 días y quedó suspendida** (no borrada): durante **14 días** se
+> puede reactivar pagando un mes (~7 USD) y **rescatar todo** lo que se cargó
+> en la web. La solución definitiva ya está funcionando en **Neon**, que no
+> caduca.
 
 ---
 
@@ -11,16 +12,20 @@
 
 | | Detalle |
 |---|---|
-| **Causa** | Las bases PostgreSQL **gratuitas de Render expiran 30 días después de crearse**. Pasado ese plazo (más 14 días de gracia) Render **elimina la base y todos sus datos**. |
-| **Confirmación** | El log del servidor muestra: `could not translate host name "dpg-daop2bek1f9s7385ucug-a" to address: Name or service not known`. Ese nombre es el de la base: ya no existe. |
+| **Causa** | Las bases PostgreSQL **gratuitas de Render expiran 30 días después de crearse**. Al expirar quedan **inaccesibles**, pero **no se borran**. |
+| **Plazo de gracia** | Render da **14 días** desde la expiración para pasar la base a un plan de pago. **Después de ese plazo sí la borra con todos sus datos**, y no guarda copia. |
+| **Confirmación** | El log del servidor muestra: `could not translate host name "dpg-daop2bek1f9s7385ucug-a" to address: Name or service not known`. Ese nombre es el de la base: está **suspendida** (el panel de Render la muestra como *Suspended*), no eliminada. |
 | **Por qué decía "Contraseña incorrecta"** | La app consultaba la base, la base no respondía, y ese error se mostraba como si fuera una clave equivocada. **Ya está corregido**: ahora dice *"El servicio está temporalmente fuera de servicio"* y **no** bloquea al equipo por intentos fallidos. |
-| **Respaldo de Render** | La documentación de Render dice textualmente: *"Render does not retain backups or snapshots of a deleted database instance"*. **No hay copia en Render.** |
-| **Fecha** | La base se creó el 22 de septiembre de 2026 y se eliminó el 22 de octubre de 2026 (exactamente 30 días). |
+| **Respaldo de Render** | El plan gratuito **no tiene ningún tipo de copia**. La documentación de Render lo dice textual: *"Free Render Postgres databases don't support any form of backups"*. |
+| **Fecha** | Se creó el 22/09/2026 y caducó el 22/10/2026 (30 días). **Periodo de gracia: hasta el ~05/11/2026.** |
 
-**Consecuencia importante:** todo lo que se cargó **en la web** entre el 29 de
-septiembre y el 22 de octubre **se perdió**. No hay forma de recuperarlo.
+**Qué está en juego:** lo que se cargó **en la web** entre el 29 de septiembre y
+el 22 de octubre **todavía se puede rescatar**, pero solo hasta el **~5 de
+noviembre**: hay que reactivar la base de Render con un plan de pago y copiar
+sus datos a Neon (ver **paso 5 bis**). Pasada esa fecha, se pierde para siempre:
+Render la borra y no conserva copia.
 
-**Lo que sí se conserva** (está en el equipo, intacto):
+**Lo que ya está a salvo** en Neon y en el equipo:
 
 | Dato | Cantidad | Dónde |
 |---|---|---|
@@ -29,11 +34,13 @@ septiembre y el 22 de octubre **se perdió**. No hay forma de recuperarlo.
 | Actividades personales | 33 | ídem |
 | Catálogos (ubicaciones, tipos, medios) | 81 | ídem |
 | Configuración por usuario | 30 | ídem |
-| Contraseñas (hashes) | **0** | *no existían fuera de la base eliminada* |
+| Contraseñas (hashes) | **0** | *estaban solo dentro de la base de Render* |
 
-> Las contraseñas estaban **solo** dentro de la base que Render eliminó. Por eso
-> hay que volver a asignarlas (paso 6). No es un error: es lo que la seguridad
-> exige cuando se rehace una base desde cero.
+> Las contraseñas originales están **solo** dentro de la base de Render. Si se
+> hace el rescate del paso 5 bis, **vuelven a funcionar tal cual** (se copian
+> los hashes). Si no se hace, hay que asignar claves nuevas desde la web
+> (paso 6): al rehacer la base desde la copia local no hay ninguna contraseña
+> que reutilizar, y eso es lo correcto por seguridad.
 
 ---
 
@@ -68,8 +75,9 @@ de proveedor. La decisión es:
 1. Entra en [neon.com](https://neon.com) y crea una cuenta (correo o Google).
 2. Neon abre una pantalla de bienvenida: **Create a project** (o "Plan free").
 3. Nombre del proyecto: `actividades`.
-4. **Región:** elige la más cercana a la de Render. Render usa `Oregon` →
-   en Neon es **AWS us-west-2 (Oregon)**.
+4. **Región:** cualquiera cercana sirve. El proyecto actual está en
+   **AWS us-east-2 (Ohio)**; se reconoce porque la cadena de conexión lleva
+   `c-7.us-east-2.aws.neon.tech`.
 5. Neon crea la base al instante. Se abre la consola del proyecto.
 6. **Guarda la contraseña**: en la esquina superior derecha, el ícono de
    contraseña / *Reset password*. Sin ella no hay conexión.
@@ -78,7 +86,7 @@ de proveedor. La decisión es:
    - **Ojo: usa la de conexión DIRECTA, no la "pooled".**
      La directa se ve así:
      ```
-     postgresql://neondb_owner:TU_CONTRASEÑA@ep-xxxx-yyy.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+     postgresql://neondb_owner:TU_CONTRASEÑA@ep-xxxx-yyy.c-7.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
      ```
      La "pooled" lleva `-pooler` en el nombre del servidor: **no sirve** para
      la aplicación web (ese proxy está pensado para conexiones efímeras
@@ -171,10 +179,82 @@ con el usuario `admin`:
 
 ---
 
+## 5 bis. Rescatar lo cargado en la web (base de Render suspendida)
+
+Esto **solo se puede hacer hasta el ~5 de noviembre de 2026**. Sirve para
+recuperar lo que se registró en la web entre el 29/09 y el 22/10, que no está en
+la copia local. Cuesta **un mes del plan más pequeño** (unos 7 USD) y luego la
+base de Render se puede borrar.
+
+### Paso 1 — Reactivar la base en Render
+
+1. Entra en [dashboard.render.com](https://dashboard.render.com) → **Databases**
+   (no en el *Web Service*).
+2. Abre la base que aparece como **Suspended** (`dpg-daop2bek1f9s7385ucug-a`).
+3. Pulsa **Upgrade** / **Change plan** y elige el plan de pago **más pequeño**.
+   Si pide tarjeta, se agrega en **Billing**.
+4. Espera a que el estado cambie a **Available** (1–3 minutos).
+
+> ⚠️ No pulses **Delete** y no crees otra base: solo el *upgrade* reactiva esta.
+
+### Paso 2 — Copiar todo de Render a Neon (una sola orden)
+
+En Render, dentro de la base → **Connect** (o *Info*) → copia la
+**External Database URL**. Es una línea larga; debe llevar el `@` antes del
+servidor.
+
+Desde este equipo, en la carpeta `Actividades`:
+
+```powershell
+python fusionar_bases.py `
+  --origen "PEGAR_AQUI_LA_URL_DE_RENDER" `
+  --destino "postgresql://neondb_owner:CONTRASENA@ep-dark-snow-b51vh3lp.c-7.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require" `
+  --contrasena-admin "UnaClaveTemporalParaElAdmin"
+```
+
+Qué hace la herramienta, en orden:
+
+| Tabla | Qué pasa |
+|---|---|
+| `registros` | Se copian **todos** los de Render (es la base que estuvo en producción). **Si Render tuviera menos registros que Neon, se detiene sin tocar nada** (protección contra borrados accidentales). |
+| `usuarios` | Se copian los **hashes originales**: las contraseñas de antes vuelven a funcionar. |
+| `actividades_personales`, `listas_globales` | Se unen sin duplicar. |
+| `configuracion_usuario` | Se queda la de Render. |
+| Sesiones y auditoría | **No se copian**: todas las sesiones abiertas quedan cerradas. |
+
+Debe terminar con algo así:
+
+```
+  registros                1.6xx
+  usuarios                 7
+  actividades_personales   33
+  configuracion_usuario    30
+  listas_globales          81
+  usuarios con contrasena: 7 de 7
+Fusion completada.
+```
+
+### Paso 3 — Verificar y borrar la base de Render
+
+1. Abre `https://actividad-0c88.onrender.com/salud`: debe responder
+   `"base_datos": "ok"` con el número de registros actualizado.
+2. Entra a la web con tu **contraseña de antes** (la original). Si no la
+   recuerdas, usa la que se pasó en `--contrasena-admin`; la app pedirá
+   cambiarla.
+3. Comprueba que aparecen los registros de octubre.
+4. **Borra la base de Render** (Database → Settings → Delete) para no seguir
+   pagando. Neon ya tiene todo.
+
+> La herramienta se puede volver a ejecutar sin miedo: no duplica nada. Y si se
+> ejecuta por error con las bases invertidas, el control de conteo la detiene
+> antes de escribir.
+
+---
+
 ## 6. Reasignar las contraseñas de los usuarios
 
-Las contraseñas **no se pudieron recuperar** (vivían solo en la base
-eliminada). Hay que volver a asignarlas:
+Si **no** se hizo el rescate del paso 5 bis, las contraseñas originales no
+existen en ningún sitio: hay que volver a asignarlas.
 
 1. Entra en la web como `admin` con la clave de `ADMIN_INITIAL_PASSWORD`.
 2. La aplicación te pedirá cambiar la contraseña del administrador: pon una
@@ -244,9 +324,11 @@ ramificación **antes** de cualquier importación masiva o cambio grande.
 
 ### 8.3 Lo que de verdad evita la repetición
 
-Que la base **no sea la gratuita de Render**: esa caduca a los 30 días y Render
-elimina los datos sin dejar copia. Con **Neon** la base no se borra nunca; a lo
-sumo el cómputo se apaga por inactividad y se vuelve a encender solo.
+Que la base **no sea la gratuita de Render**: esa caduca a los 30 días; al
+caducar queda suspendida y solo se recupera pagando dentro de los **14 días**
+siguientes, y pasado ese plazo Render borra los datos sin dejar copia. Con
+**Neon** la base no se borra nunca; a lo sumo el cómputo se apaga por
+inactividad y se vuelve a encender solo.
 
 El respaldo automático (8.1) y las ramificaciones (8.2) son la red de seguridad
 para lo que sí puede fallar: un error de importación, un borrado accidental.

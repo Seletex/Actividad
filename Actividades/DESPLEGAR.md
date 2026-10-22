@@ -27,21 +27,23 @@ git commit -m "Flujo admin asigna contrasena + scripts de despliegue"
 ## 2. Crear la base de datos PostgreSQL en Neon (gratis)
 
 > ⚠️ **Importante:** las bases PostgreSQL **gratuitas de Render caducan a los
-> 30 días** y Render las elimina con todos sus datos, sin conservar copia. Ya
-> se perdió la base de este proyecto por esa causa (22/09/2026 - 22/10/2026).
-> Por eso la base ahora vive en **Neon**, cuyo plan gratuito no borra nunca los
-> datos. Si la base ya se eliminó y hay que recuperarla, sigue la guía
-> **[RECUPERAR.md](RECUPERAR.md)**.
+> 30 días**. Al caducar quedan **suspendidas** (no borradas) y solo se recuperan
+> pagando un plan dentro de los **14 días** siguientes; pasado ese plazo Render
+> las borra con todos sus datos, sin conservar copia. Así caducó la base de este
+> proyecto (22/09/2026 - 22/10/2026). Por eso la base ahora vive en **Neon**,
+> cuyo plan gratuito no borra nunca los datos. Si hay que rescatar algo de la
+> base de Render, sigue **[RECUPERAR.md](RECUPERAR.md)** (paso 5 bis).
 
 1. Entra en [neon.com](https://neon.com) y crea una cuenta gratuita.
-2. **Create a project** → nombre `actividades` → región **AWS us-west-2
-   (Oregon)** (la misma que usa Render).
+2. **Create a project** → nombre `actividades` → región **AWS us-east-2
+   (Ohio)**. Cualquier región sirve (la latencia cambia poco); esta es la que
+   usa el proyecto actual. La *connection string* lo indica: `...c-7.us-east-2.aws.neon.tech`.
 3. Guarda la contraseña de la base (ícono de contraseña, arriba a la derecha).
 4. En **Connection details**, copia la **Connection string DIRECTA** (la que
    **no** lleva `-pooler` en el nombre del servidor). Se ve así:
 
 ```
-postgresql://neondb_owner:XXXXXXXX@ep-XXXX-XXX.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+postgresql://neondb_owner:XXXXXXXX@ep-XXXX-XXX.c-7.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
 ```
 
 > No borrar el `?sslmode=require&channel_binding=require`: es lo que Neon
@@ -187,7 +189,8 @@ Opciones:
 | Configurar admin (web) | `set DATABASE_URL=<url>` + `python setup_admin.py` |
 | Subir datos a la web | `set DATABASE_URL=<url>` + `python sync_db_to_postgres.py` |
 | **Restaurar todo tras perder la base** | `python restaurar_produccion.py --url <url> --local "%LOCALAPPDATA%\ActividadesData\actividades.db"` |
+| **Rescatar la base suspendida de Render** | `python fusionar_bases.py --origen <url_render> --destino <url_neon>` |
 | **Respaldo automático diario** | `python respaldar_automatico.py --url <url> --destino <carpeta>` |
 
-> Si la base de datos de Render se eliminó o dejó de responder, la guía
-> completa de recuperación está en **[RECUPERAR.md](RECUPERAR.md)**.
+> Si la base de datos de Render quedó suspendida o la app dejó de responder, la
+> guía completa de recuperación está en **[RECUPERAR.md](RECUPERAR.md)**.

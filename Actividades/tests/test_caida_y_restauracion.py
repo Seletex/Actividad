@@ -373,3 +373,62 @@ class TestRestauracionDesdeElNavegador:
         }
         assert "Actividad suelta" in valores
         assert "Dependencia suelta" in valores
+
+class TestHerramientaDeFusion:
+    """La herramienta que rescata la base de Render dentro de Neon.
+
+    Con psycopg2.extras.RealDictCursor las filas llegan como diccionarios. La
+    primera version de la herramienta hacia ``fila[0]`` y fallaba justo al
+    conectar con la base real, por eso se fija aqui ese contrato.
+    """
+
+    class _CursorFalso:
+        def __init__(self, filas):
+            self._filas = filas
+            self.consultas = []
+
+        def execute(self, consulta, parametros=None):
+            self.consultas.append((consulta, parametros))
+
+        def fetchall(self):
+            return self._filas
+
+        def fetchone(self):
+            return self._filas[0] if self._filas else None
+
+    def test_cuenta_con_filas_de_diccionario(self):
+        import fusionar_bases
+
+        cursor = self._CursorFalso([{"total": 1605}])
+        assert fusionar_bases.contar(cursor, "registros") == 1605
+
+    def test_cuenta_con_filas_de_tupla(self):
+        import fusionar_bases
+
+        cursor = self._CursorFalso([(1605,)])
+        assert fusionar_bases.contar(cursor, "registros") == 1605
+
+    def test_lee_columnas_con_filas_de_diccionario(self):
+        import fusionar_bases
+
+        cursor = self._CursorFalso([{"nombre": "id"}, {"nombre": "usuario"}])
+        assert fusionar_bases.columnas_de(cursor, "registros") == {"id", "usuario"}
+
+    def test_lee_columnas_con_filas_de_tupla(self):
+        import fusionar_bases
+
+        cursor = self._CursorFalso([("id",), ("usuario",)])
+        assert fusionar_bases.columnas_de(cursor, "registros") == {"id", "usuario"}
+
+    def test_la_contrasena_que_asigna_la_acepta_la_aplicacion(self):
+        """La clave temporal debe funcionar en el login de la app."""
+        import fusionar_bases
+        from database import _hash_contrasena, _verificar_contrasena
+
+        digest, salt = fusionar_bases.hashear_contrasena("ClaveTemporal-2026")
+        assert _verificar_contrasena("ClaveTemporal-2026", digest, salt)
+        assert not _verificar_contrasena("OtraClave-2026", digest, salt)
+
+        # Y el algoritmo es el mismo que usa la aplicacion.
+        digest_app, _ = _hash_contrasena("ClaveTemporal-2026", salt)
+        assert digest_app == digest
