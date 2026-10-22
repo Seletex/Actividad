@@ -14,7 +14,7 @@ Como usarlo
 Desde el equipo, con la URL externa de PostgreSQL:
 
     python respaldar_automatico.py ^
-        --url "postgresql://usuario:clave@dpg-xxxx-a.oregon-postgres.render.com/actividades" ^
+        --url "postgresql://usuario:clave@ep-xxxx-yyy.us-west-2.aws.neon.tech/neondb?sslmode=require" ^
         --destino "\\192.168.10.2\\respaldos_actividades"
 
 Para que se ejecute solo, cree una tarea programada de Windows con este mismo

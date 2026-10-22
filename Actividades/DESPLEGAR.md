@@ -24,28 +24,28 @@ git commit -m "Flujo admin asigna contrasena + scripts de despliegue"
 
 ---
 
-## 2. Crear la base de datos PostgreSQL en Render
+## 2. Crear la base de datos PostgreSQL en Neon (gratis)
 
-> ⚠️ **Importante:** el plan **Free** de Render **caduca a los 30 días** y
-> Render elimina la base con todos sus datos, sin conservar copia. Para un
-> servicio en producción usa el plan **Starter** (desde 7 USD/mes), que incluye
-> respaldos automáticos. Si la base ya se eliminó y hay que recuperarla, sigue
-> la guía **[RECUPERAR.md](RECUPERAR.md)**.
+> ⚠️ **Importante:** las bases PostgreSQL **gratuitas de Render caducan a los
+> 30 días** y Render las elimina con todos sus datos, sin conservar copia. Ya
+> se perdió la base de este proyecto por esa causa (22/09/2026 - 22/10/2026).
+> Por eso la base ahora vive en **Neon**, cuyo plan gratuito no borra nunca los
+> datos. Si la base ya se eliminó y hay que recuperarla, sigue la guía
+> **[RECUPERAR.md](RECUPERAR.md)**.
 
-1. Inicia sesión en Render y entra en el panel.
-2. Crea una **PostgreSQL** (Database):
-   - Nombre: `actividades-db`
-   - **Plan: Starter** (recomendado) o *Free* solo para pruebas de pocos días.
-3. Cuando se cree, Render te mostrará la **Connection String** (Internal
-   Database URL). **Cópiala y guárdala**, la necesitarás para subir datos
-   (paso opcional 5). Se ve así:
+1. Entra en [neon.com](https://neon.com) y crea una cuenta gratuita.
+2. **Create a project** → nombre `actividades` → región **AWS us-west-2
+   (Oregon)** (la misma que usa Render).
+3. Guarda la contraseña de la base (ícono de contraseña, arriba a la derecha).
+4. En **Connection details**, copia la **Connection string DIRECTA** (la que
+   **no** lleva `-pooler` en el nombre del servidor). Se ve así:
 
 ```
-postgresql://actividadesdb_user:XXXXXXXX@dpg-XXXX-a.oregon-postgres.render.com/actividadesdb
+postgresql://neondb_owner:XXXXXXXX@ep-XXXX-XXX.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
 ```
 
-> Render carga la app con la opción "Connect to an existing database" y este
-> archivo `render.yaml`; pero si creas la web manualmente, pega allí esta URL.
+> No borrar el `?sslmode=require&channel_binding=require`: es lo que Neon
+> exige para aceptar la conexión y mantiene el tráfico cifrado.
 
 ---
 
@@ -53,15 +53,22 @@ postgresql://actividadesdb_user:XXXXXXXX@dpg-XXXX-a.oregon-postgres.render.com/a
 
 Opciones:
 
-### A) Usando `render.yaml` (Blueprints) — recomendado
+### A) Usando `render.yaml` (Blueprints)
 
 El archivo `render.yaml` ya está preparado. En Render crea un **Blueprint** y
-selecciona este repositorio. Render creará **juntas** la base (`actividades-db`)
-y el servicio web (`actividades-app`) con:
+selecciona este repositorio. Render creará el servicio web (`actividades-app`)
+con:
 
 - Build: `pip install -r requirements.txt`
 - Start: `gunicorn app:app --config gunicorn_config.py`
-- Entorno: `DATABASE_URL` (desde la BD) + `FLASK_SECRET_KEY` (auto) + `PYTHON_VERSION=3.11.0`
+- Entorno: `FLASK_SECRET_KEY` (auto) + `PYTHON_VERSION=3.11.0` +
+  `SESSION_COOKIE_SECURE` + `TRUST_PROXY`
+- `DATABASE_URL`: Render **te la pide** al desplegar (está como `sync: false`).
+  Pega ahí la **Connection string directa de Neon** del paso 2.
+
+> El archivo **no declara ninguna base de datos de Render** a propósito: se
+> usa Neon. Declarar una base gratuita de Render reintroduciría el problema de
+> la caducidad a los 30 días.
 
 ### B) Manual
 
@@ -71,8 +78,8 @@ y el servicio web (`actividades-app`) con:
    - **Start Command**: `gunicorn app:app --config gunicorn_config.py`
    - **Environment Variables**:
      - `PYTHON_VERSION` = `3.11.0`
-3. Ve a tu instancia de `actividades-db` → **Connect** → copia la *Internal
-   Database URL* y créala como variable de entorno `DATABASE_URL` en el web service.
+3. Crea la variable de entorno `DATABASE_URL` en el web service con la
+   **Connection string directa de Neon** (paso 2).
 4. Añade también `FLASK_SECRET_KEY` (Render puede generarla automáticamente).
 
 > `requirements.txt` ya incluye `psycopg2-binary`, `flask`, `gunicorn`, `pandas`,

@@ -12,7 +12,7 @@ PostgreSQL que se le indique.
 Ejemplo (desde el equipo, con la URL externa de la base nueva de Render):
 
     python restaurar_produccion.py ^
-        --url "postgresql://usuario:clave@dpg-xxxx-a.oregon-postgres.render.com/actividades" ^
+        --url "postgresql://usuario:clave@ep-xxxx-yyy.us-west-2.aws.neon.tech/neondb?sslmode=require" ^
         --local "%LOCALAPPDATA%\\ActividadesData\\actividades.db" ^
         --contrasena-admin "UnaClaveFuerte"
 

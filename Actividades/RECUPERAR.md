@@ -37,48 +37,65 @@ septiembre y el 22 de octubre **se perdió**. No hay forma de recuperarlo.
 
 ---
 
-## 2. Decisión importante: qué base de datos usar
+## 2. Decisión tomada: base de datos en Neon (gratis)
 
-La base gratuita **vuelve a caducar en 30 días**. Para que no se repita, hay
-que cambiar de plan. Elija una de estas dos:
+La base gratuita de Render **vuelve a caducar en 30 días**, así que se cambió
+de proveedor. La decisión es:
 
-### Opción A — Render PostgreSQL de pago (recomendada)
-
-- Plan **Starter** (desde **7 USD/mes**). Nunca caduca.
-- **Incluye copias de seguridad automáticas** y recuperación a un punto en el
-  tiempo: si algo sale mal, no se pierde nada.
-- Todo queda en el mismo panel de Render que ya conoce. No hay que crear
-  cuentas en otros sitios.
-
-### Opción B — PostgreSQL gratuito en Neon
+### Neon — plan gratuito (elegido) ✅
 
 - [neon.com](https://neon.com) → cuenta gratuita (0,5 GB, suficiente de sobra).
-- **No caduca nunca**: si el proyecto queda inactivo, se pausa, pero **los datos
-  siguen ahí**.
+- **No caduca nunca**: si el proyecto queda inactivo, el *cómputo* se apaga,
+  pero **los datos siguen ahí** intactos. Se vuelve a encender solo en el
+  siguiente acceso.
+- Conexión cifrada por SSL obligatoria (Neon no acepta conexiones sin cifrar).
+- **Ramificaciones:** se puede crear una copia de la base en un clic
+  ("Create branch"), que sirve de respaldo instantáneo sin coste.
 - Cambia **una sola cosa**: la variable `DATABASE_URL`.
 
-> En cualquiera de las dos opciones la aplicación se modifica **cero** líneas:
-> todo depende de `DATABASE_URL`.
+> Lo descartado: **Render PostgreSQL de pago** (plan *Starter*, 7 USD/mes) era
+> la opción más cómoda porque todo queda en el mismo panel, pero requiere
+> tarjeta. Si más adelante hay presupuesto, migrar de Neon a Render de pago es
+> cambiar de nuevo la misma variable `DATABASE_URL`, sin tocar el código.
+
+> La aplicación **no cambia ni una línea de código**: todo depende de
+> `DATABASE_URL`.
 
 ---
 
-## 3. Crear la base de datos nueva (en Render)
+## 3. Crear la base de datos nueva en Neon (gratis)
 
-1. Entra en [dashboard.render.com](https://dashboard.render.com).
-2. **+ New → Postgres**.
-3. Nombre: `actividades-db` (o `actividades-db-2` si el nombre anterior sigue ocupado).
-4. Plan: **Starter** (opción A) o **Free** (opción B, si quiere probar antes de pagar).
-5. Región: la misma de siempre (`Oregon`).
-6. **Create**. Render tarda unos minutos en crearla.
+1. Entra en [neon.com](https://neon.com) y crea una cuenta (correo o Google).
+2. Neon abre una pantalla de bienvenida: **Create a project** (o "Plan free").
+3. Nombre del proyecto: `actividades`.
+4. **Región:** elige la más cercana a la de Render. Render usa `Oregon` →
+   en Neon es **AWS us-west-2 (Oregon)**.
+5. Neon crea la base al instante. Se abre la consola del proyecto.
+6. **Guarda la contraseña**: en la esquina superior derecha, el ícono de
+   contraseña / *Reset password*. Sin ella no hay conexión.
+7. Abajo a la izquierda, en el panel **Connection details** (o *Connect*):
+   - Copia la **Connection string**.
+   - **Ojo: usa la de conexión DIRECTA, no la "pooled".**
+     La directa se ve así:
+     ```
+     postgresql://neondb_owner:TU_CONTRASEÑA@ep-xxxx-yyy.us-west-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+     ```
+     La "pooled" lleva `-pooler` en el nombre del servidor: **no sirve** para
+     la aplicación web (ese proxy está pensado para conexiones efímeras
+     de servidores sin estado).
+
+> **La contraseña de Neon contiene caracteres especiales.** Si la copias a
+> mano, asegúrese de que no falte ninguno. Lo más seguro es usar el botón
+> *Copy* y pegarla entera.
 
 ---
 
-## 4. Conectar la base nueva con la aplicación
+## 4. Conectar la base de Neon con la aplicación en Render
 
 1. En el panel de Render, abre tu **Web Service** (la aplicación web).
 2. Ve a **Environment** (variables de entorno).
-3. Sustituye el valor de `DATABASE_URL` por la **Internal Database URL** de la base nueva.
-   La encuentras en la base nueva → **Info** → *Internal Database URL*.
+3. Sustituye el valor de `DATABASE_URL` por la **Connection string directa**
+   de Neon (la del punto 7 del paso anterior).
 4. Comprueba que estas variables siguen ahí:
    - `FLASK_SECRET_KEY` — **no la cambies**: si la cambias, se caen las sesiones
      abiertas de todos (no es grave, pero molesta).
@@ -86,6 +103,8 @@ que cambiar de plan. Elija una de estas dos:
    - `ADMIN_INITIAL_PASSWORD` — ponle una clave temporal **solo para el primer
      ingreso**. **Bórrala en cuanto entres** (más abajo se explica).
 5. Pulsa **Save Changes** → Render **redespliega** automáticamente.
+   > Si no se redespliega solo, ve a la página del servicio → **Manual Deploy →
+   > Deploy latest commit**.
 6. Comprueba el estado en <https://actividad-0c88.onrender.com/salud>. Debe
    responder algo como:
    `{"servicio": "ok", "base_datos": "ok", "registros": 0}`
@@ -108,18 +127,18 @@ La herramienta `restaurar_produccion.py` copia **todo** desde la base local
 (registros, usuarios, actividades, catálogos y configuración) y verifica que
 todo haya quedado bien.
 
-1. En Render, base nueva → **Info** → copia la **External Database URL**
-   (empieza por `postgresql://...@dpg-...-a.oregon-postgres.render.com/...`).
-   > La URL externa termina en `?sslmode=require`. **Déjelo así**: es lo que
-   > Render exige para las conexiones que llegan desde fuera de Render y
-   > mantiene el tráfico cifrado. No lo borre.
+1. Vuelve a la consola de Neon → **Connection details** → copia la
+   **Connection string directa** (la misma que pegaste en `DATABASE_URL`).
+   > Termina en `?sslmode=require&channel_binding=require`. **Déjelo tal cual**:
+   > es lo que Neon exige para aceptar la conexión y mantiene el tráfico
+   > cifrado. Si la URL va entre comillas en PowerShell, no la partas.
 2. Abre **PowerShell** en la carpeta `Actividades` del proyecto y ejecuta:
 
 ```powershell
 cd "C:\Users\apoyosistemas\Documents\GitDesk\Actividad\Actividades"
 
 python restaurar_produccion.py `
-  --url "postgresql://PEGA_AQUI_LA_EXTERNAL_DATABASE_URL" `
+  --url "postgresql://PEGA_AQUI_LA_CONNECTION_STRING_DE_NEON" `
   --local "$env:LOCALAPPDATA\ActividadesData\actividades.db" `
   --contrasena-admin "UnaClaveFuerteParaElAdmin" `
   --forzar-cambio-admin
@@ -193,7 +212,7 @@ La copia útil tiene que salir de la nube. Para eso está `respaldar_automatico.
 
 ```powershell
 python respaldar_automatico.py `
-  --url "postgresql://LA_EXTERNAL_DATABASE_URL" `
+  --url "postgresql://LA_CONNECTION_STRING_DE_NEON" `
   --destino "\\192.168.10.2\respaldos_actividades"
 ```
 
@@ -211,15 +230,30 @@ los 30 últimos. Para que se ejecute solo:
 
 Con eso, aunque la base se perdiera otra vez, se recupera en minutos.
 
-### 8.2 Lo que de verdad evita la repetición
+### 8.2 Respaldo instantáneo dentro de Neon (gratis)
 
-Elegir la **opción A** (Render de pago) o la **opción B** (Neon). Mientras la
-base sea la **gratuita de Render**, la pérdida está anunciada: caduca a los 30
-días. El respaldo automático es la red de seguridad, no la solución.
+Neon permite crear una **ramificación** (*branch*): una copia de la base que
+comparte el almacenamiento (no ocupa el doble de espacio).
 
-### 8.3 Comprobaciones que ya están dentro de la aplicación
+1. Consola de Neon → proyecto **actividades** → **Branches**.
+2. **Create branch** → nombre `respaldo-2026-10-22` (o la fecha del día).
+3. Para restaurar: en esa ramificación, *Reset* / *Promote* → de vuelta a `main`.
 
-- `/salud` dice si la base responde (sinneed entrar con clave).
+Es una segunda red de seguridad, sin coste y en dos clics. Conviene crear una
+ramificación **antes** de cualquier importación masiva o cambio grande.
+
+### 8.3 Lo que de verdad evita la repetición
+
+Que la base **no sea la gratuita de Render**: esa caduca a los 30 días y Render
+elimina los datos sin dejar copia. Con **Neon** la base no se borra nunca; a lo
+sumo el cómputo se apaga por inactividad y se vuelve a encender solo.
+
+El respaldo automático (8.1) y las ramificaciones (8.2) son la red de seguridad
+para lo que sí puede fallar: un error de importación, un borrado accidental.
+
+### 8.4 Comprobaciones que ya están dentro de la aplicación
+
+- `/salud` dice si la base responde (no hace falta entrar con clave).
 - La caída de la base **no** muestra "Contraseña incorrecta" ni bloquea la IP.
 - El respaldo que genera la web se puede descargar en cualquier momento desde
   *Gestión → Descargar respaldo ZIP*.

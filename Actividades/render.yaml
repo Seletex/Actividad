@@ -5,10 +5,17 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --config gunicorn_config.py
     envVars:
+      # La base de datos NO vive en Render: vive en Neon (plan gratuito).
+      #
+      # Por que: las bases PostgreSQL gratuitas de Render caducan a los 30
+      # dias y Render las elimina con todos sus datos, sin conservar copia.
+      # Ya se perdio la base de este proyecto por esa causa (22/09/2026 -
+      # 22/10/2026). En Neon la base no caduca nunca.
+      #
+      # Al desplegar, Render pide este valor: pegue la "Connection string"
+      # DIRECTA de Neon (la que NO lleva "-pooler" en el nombre del servidor).
       - key: DATABASE_URL
-        fromDatabase:
-          name: actividades-db
-          property: connectionString
+        sync: false
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: PYTHON_VERSION
@@ -18,10 +25,6 @@ services:
       - key: TRUST_PROXY
         value: "true"
 
-databases:
-  - name: actividades-db
-    # El plan "free" de Render caduca a los 30 dias y Render elimina la base
-    # con todos sus datos, sin conservar copia. Ya se perdio la base de este
-    # proyecto por esa causa (22/09/2026 - 22/10/2026). El plan "starter"
-    # no caduca e incluye respaldos automaticos.
-    plan: starter
+# No se declara ninguna base de datos de Render a proposito: el proyecto usa
+# Neon. Declarar aqui una base gratuita de Render reintroduiria el problema de
+# la caducidad a los 30 dias.
