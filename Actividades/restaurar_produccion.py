@@ -192,7 +192,19 @@ def main():
     print(f"Modo             : {argumentos.modo}")
     print("-" * 62)
 
-    conexion = psycopg2.connect(argumentos.url)
+    try:
+        conexion = psycopg2.connect(argumentos.url, connect_timeout=30)
+    except Exception as exc:
+        print("-" * 62)
+        print(f"ERROR: no se pudo conectar con la base de datos: {exc}")
+        print()
+        print("Revise que la URL sea correcta y completa. En Neon debe ser la")
+        print("'Connection string' DIRECTA (la que NO lleva '-pooler') y debe")
+        print("empezar por 'postgresql://' y terminar en 'neondb?sslmode=require'.")
+        print("Si la contraseña trae caracteres especiales, copie la URL con el")
+        print("boton 'Copy' de la consola de Neon en vez de escribirla a mano.")
+        return 1
+
     conexion.autocommit = False
     cursor = conexion.cursor()
 
