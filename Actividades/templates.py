@@ -258,7 +258,32 @@ MAIN_TEMPLATE = """
                     {seccion_registro}
                     
                     {importar_html}
-                    
+
+                    <div class="card border-0 shadow-sm mb-4" style="border-radius: 15px;">
+                        <div class="card-body p-4">
+                            <h5 class="mb-1"><i class="fas fa-search text-primary me-2"></i>Buscar en mis actividades</h5>
+                            <p class="text-muted small mb-3">
+                                Busca en todo el historial: descripción, observaciones, solicitante, ubicación, tipo…
+                                No importan las tildes ni las mayúsculas.
+                            </p>
+                            <form action="/listado" method="GET" class="row g-2">
+                                <div class="col-12 col-md">
+                                    <input type="search" name="q" class="form-control form-control-lg"
+                                           placeholder="Ej.: revisión de equipo, Juan Pérez, oficina…"
+                                           aria-label="Buscar actividades">
+                                </div>
+                                <div class="col-12 col-md-auto d-flex gap-2">
+                                    <button type="submit" class="btn btn-primary btn-lg flex-grow-1">
+                                        <i class="fas fa-search me-1"></i> Buscar
+                                    </button>
+                                    <a href="/listado" class="btn btn-outline-secondary btn-lg">
+                                        Ver historial
+                                    </a>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
                     <hr class="my-5">
                     
                     <div class="d-flex justify-content-between align-items-center mb-3">
@@ -1064,7 +1089,7 @@ LISTADO_TEMPLATE = """
                     {alertas}
 
                     <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h2><i class="fas fa-list-ul text-primary me-2"></i> Todas mis Actividades</h2>
+                        <h2><i class="fas fa-list-ul text-primary me-2"></i> {titulo_listado}</h2>
                         <a href="/" class="btn btn-primary rounded-pill px-4">
                             <i class="fas fa-plus me-1"></i> Nuevo Registro
                         </a>
@@ -1115,45 +1140,50 @@ LISTADO_TEMPLATE = """
                     {importar_html}
 
                     <div class="filter-section">
-                        <div class="row g-3">
-                            <div class="col-md-12 mb-2">
+                        <form action="/listado" method="GET" class="row g-3 align-items-end">
+                            <div class="col-12">
+                                <label class="form-label small fw-bold text-muted">BUSCAR ACTIVIDAD</label>
                                 <div class="position-relative">
                                     <i class="fas fa-search search-icon"></i>
-                                    <input type="text" id="searchInput" class="form-control search-input" placeholder="Buscar por actividad, ubicación o solicitante...">
+                                    <input type="search" name="q" id="searchInput" class="form-control search-input"
+                                           value="{val_busqueda}"
+                                           placeholder="Descripción, observaciones, solicitante, ubicación, tipo…">
+                                </div>
+                                <div class="form-text">
+                                    Busca en <strong>todo el historial</strong>. Con varias palabras se muestran
+                                    las actividades que las contengan todas.
                                 </div>
                             </div>
-                            <div class="col-12">
-                                <form action="/listado" method="GET" class="row g-3 align-items-end">
-                                    <div class="col-md-3">
-                                        <label class="form-label small fw-bold text-muted">FECHA INICIO</label>
-                                        <input type="date" name="fecha_inicio" class="form-control" value="{val_fecha_inicio}">
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label small fw-bold text-muted">FECHA FIN</label>
-                                        <input type="date" name="fecha_fin" class="form-control" value="{val_fecha_fin}">
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label small fw-bold text-muted">ESTADO</label>
-                                        <select name="estado" class="form-select">
-                                            <option value="Todos" {sel_todos}>Todos los estados</option>
-                                            <option value="Sí" {sel_si}>Cumplido</option>
-                                            <option value="No" {sel_no}>No Cumplido</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <div class="d-flex gap-2">
-                                            <button type="submit" class="btn btn-primary w-100">
-                                                <i class="fas fa-filter me-1"></i> Filtrar
-                                            </button>
-                                            <a href="/listado" class="btn btn-outline-secondary w-100">
-                                                <i class="fas fa-sync-alt me-1"></i> Limpiar
-                                            </a>
-                                        </div>
-                                    </div>
-                                </form>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-bold text-muted">FECHA INICIO</label>
+                                <input type="date" name="fecha_inicio" class="form-control" value="{val_fecha_inicio}">
                             </div>
-                        </div>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-bold text-muted">FECHA FIN</label>
+                                <input type="date" name="fecha_fin" class="form-control" value="{val_fecha_fin}">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label small fw-bold text-muted">ESTADO</label>
+                                <select name="estado" class="form-select">
+                                    <option value="Todos" {sel_todos}>Todos los estados</option>
+                                    <option value="Sí" {sel_si}>Cumplido</option>
+                                    <option value="No" {sel_no}>No Cumplido</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="d-flex gap-2">
+                                    <button type="submit" class="btn btn-primary w-100">
+                                        <i class="fas fa-search me-1"></i> Buscar
+                                    </button>
+                                    <a href="/listado" class="btn btn-outline-secondary w-100">
+                                        <i class="fas fa-sync-alt me-1"></i> Limpiar
+                                    </a>
+                                </div>
+                            </div>
+                        </form>
                     </div>
+
+                    {aviso_busqueda}
 
                     <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
                         <div class="card-body p-0">
@@ -1219,15 +1249,9 @@ LISTADO_TEMPLATE = """
                 }}
             }}
 
-            // Buscador en tiempo real
-            $("#searchInput").on("keyup", function() {{
-                var value = $(this).val().toLowerCase();
-                $("#tableBody tr").filter(function() {{
-                    $(this).toggle($(this).text().toLowerCase().indexOf(value) > -1)
-                }});
-                updateCounters();
-            }});
-
+            // Buscador: la busqueda la resuelve el servidor (recorre todo el
+            // historial, incluida la descripcion y las observaciones). Aqui
+            // solo se actualizan los contadores de lo que se muestra.
             // Inicializar contadores
             updateCounters();
         }});

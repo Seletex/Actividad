@@ -16,6 +16,7 @@ import html
 import re
 import secrets
 import tempfile
+import unicodedata
 from datetime import datetime
 from functools import wraps
 
@@ -296,6 +297,56 @@ def _hora_actual():
     return datetime.now().strftime("%H:%M:%S")
 
 
+# Columnas en las que busca el buscador del historial. Incluye la descripcion y
+# las observaciones, que es donde de verdad esta escrito el detalle de la
+# actividad (la tabla solo muestra el tipo).
+_COLUMNAS_BUSQUEDA = (
+    "USUARIO",
+    "TIPO DE ACTIVIDAD",
+    "FECHA",
+    "DEPENDENCIA",
+    "SOLICITANTE",
+    "TIPO DE SOLICITUD",
+    "MEDIO DE SOLICITUD",
+    "DESCRIPCIÓN",
+    "CUMPLIDO",
+    "FECHA ATENCIÓN",
+    "OBSERVACIONES",
+)
+
+
+def _normalizar_busqueda(texto):
+    """Minúsculas y sin tildes, para que 'revision' encuentre 'revisión'."""
+    sin_tildes = unicodedata.normalize("NFKD", str(texto or ""))
+    sin_tildes = "".join(c for c in sin_tildes if not unicodedata.combining(c))
+    return sin_tildes.casefold().strip()
+
+
+def _filtrar_registros_por_texto(df, texto):
+    """Filtra las filas que contienen TODAS las palabras buscadas.
+
+    La búsqueda es insensible a mayúsculas y tildes y recorre todas las
+    columnas de texto, incluida la descripción y las observaciones. Con varias
+    palabras no hace falta que estén juntas: cada una puede aparecer en
+    cualquier columna.
+    """
+    terminos = _normalizar_busqueda(texto).split()
+    if not terminos or df.empty:
+        return df
+
+    columnas = [c for c in _COLUMNAS_BUSQUEDA if c in df.columns]
+    if not columnas:
+        return df
+
+    contenido = (
+        df[columnas].astype(str).agg(" ".join, axis=1).map(_normalizar_busqueda)
+    )
+    mascara = contenido.str.contains(terminos[0], regex=False)
+    for termino in terminos[1:]:
+        mascara &= contenido.str.contains(termino, regex=False)
+    return df[mascara]
+
+
 def _html_importacion(usuario_actual):
     """Muestra el formulario de carga de Excel únicamente al administrador."""
     if usuario_actual != "admin":
@@ -493,8 +544,14 @@ def salud():
 @login_required
 @cambio_requerido
 def listado():
-    """Muestra el historial completo de actividades del usuario."""
+    """Muestra el historial completo de actividades del usuario.
+
+    Admite una búsqueda de texto (``q``) y los filtros por fecha y estado. El
+    usuario busca solo dentro de sus propias actividades; el administrador
+    busca en las de todos.
+    """
     usuario_actual = session.get('usuario')
+    busqueda = sanitizar(request.args.get('q', ''), 100)
     fecha_inicio = _fecha_valida(request.args.get('fecha_inicio', ''))
     fecha_fin = _fecha_valida(request.args.get('fecha_fin', ''))
     estado = request.args.get('estado', 'Todos').strip()
@@ -502,6 +559,7 @@ def listado():
         estado = 'Todos'
 
     df = cargar_registros(None if usuario_actual == 'admin' else usuario_actual)
+    df = _filtrar_registros_por_texto(df, busqueda)
 
     if not df.empty:
         columna_fecha = None
@@ -521,11 +579,31 @@ def listado():
         if estado != 'Todos' and 'CUMPLIDO' in df.columns:
             df = df[df['CUMPLIDO'].fillna('').astype(str) == estado]
 
+    aviso_busqueda = ""
+    if busqueda:
+        cantidad = len(df)
+        coincidencias = (
+            "1 actividad coincide" if cantidad == 1
+            else f"{cantidad} actividades coinciden"
+        )
+        aviso_busqueda = (
+            '<div class="alert alert-info border-0 rounded-4">'
+            '<i class="fas fa-search me-2"></i>'
+            f'{coincidencias} con «{html.escape(busqueda)}».'
+            '</div>'
+        )
+
     tabla_html = generar_tabla_actividades_completa(df, usuario_actual)
     page = LISTADO_TEMPLATE.format(
         usuario_actual=usuario_actual,
+        titulo_listado=(
+            "Todas las Actividades" if usuario_actual == 'admin'
+            else "Todas mis Actividades"
+        ),
         alertas=_alertas_listado(),
         tabla_registros=tabla_html,
+        aviso_busqueda=aviso_busqueda,
+        val_busqueda=html.escape(busqueda, quote=True),
         val_fecha_inicio=fecha_inicio,
         val_fecha_fin=fecha_fin,
         sel_todos='selected' if estado == 'Todos' else '',
