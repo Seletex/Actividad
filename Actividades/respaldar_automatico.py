@@ -9,6 +9,17 @@ script baja una copia a una carpeta del equipo (por ejemplo la carpeta
 compartida de la red interna), de modo que la perdida de la base en la nube
 deje de significar la perdida de la informacion.
 
+Que contiene el respaldo
+------------------------
+Un ZIP con dos tipos de copia:
+
+- ``base_completa.sql``: volcado completo de la base hecho con ``pg_dump``
+  (registros, usuarios con sus contrasenas, bitacora y sesiones). Permite
+  restaurar la aplicacion tal como estaba. Requiere tener instalado
+  ``pg_dump``; si no esta, el respaldo se genera igual sin este archivo.
+- ``registros.csv``, ``usuarios.json`` y ``manifiesto.json``: copia legible
+  de los datos operativos, para abrir en Excel o reimportar desde la web.
+
 Como usarlo
 -----------
 Desde el equipo, con la URL externa de PostgreSQL:
@@ -18,21 +29,26 @@ Desde el equipo, con la URL externa de PostgreSQL:
         --destino "\\192.168.10.2\\respaldos_actividades"
 
 Para que se ejecute solo, cree una tarea programada de Windows con este mismo
-comando (a diario, por ejemplo a las 22:00). El ZIP queda con la fecha y hora
+comando (a diario, por ejemplo a las 18:00). El ZIP queda con la fecha y hora
 en el nombre y el script conserva solo los ultimos respaldos indicados con
 --conservar (30 por defecto).
 
-El archivo NO contiene contrasenas ni hashes de contrasena, igual que el
-respaldo que genera la aplicacion.
+Con ``--sin-dump`` se omite ``base_completa.sql`` y el ZIP no lleva
+contrasenas, igual que el respaldo que genera la aplicacion.
 """
 
 import argparse
 import glob
 import json
 import os
+import shutil
+import subprocess
 import sys
 import zipfile
 from datetime import datetime
+
+# Tiempo maximo que puede tardar pg_dump antes de darse por vencido.
+_TIEMPO_MAXIMO_DUMP = 300
 
 try:
     import psycopg2
@@ -64,6 +80,53 @@ def _consultar(cursor, sql):
     return cursor.fetchall()
 
 
+def buscar_pg_dump():
+    """Localiza ``pg_dump``. Devuelve la ruta o ``None`` si no esta instalado."""
+    ruta = shutil.which("pg_dump")
+    if ruta:
+        return ruta
+    # En Windows no siempre queda en el PATH: se busca en PostgreSQL.
+    candidatos = sorted(
+        glob.glob(r"C:\Program Files\PostgreSQL\*\bin\pg_dump.exe"),
+        reverse=True,
+    )
+    return candidatos[0] if candidatos else None
+
+
+def volcar_base_completa(url, ruta_pg_dump):
+    """Devuelve el volcado SQL completo de la base, o ``None`` si no se pudo.
+
+    Incluye las contrasenas (hashes) y la bitacora, para que una restauracion
+    deje la aplicacion exactamente como estaba. Se usa ``--clean --if-exists``
+    para que el SQL se pueda cargar sobre una base vacia o sobre una existente.
+    """
+    try:
+        resultado = subprocess.run(
+            [
+                ruta_pg_dump,
+                "--no-owner",
+                "--no-privileges",
+                "--clean",
+                "--if-exists",
+                url,
+            ],
+            capture_output=True,
+            timeout=_TIEMPO_MAXIMO_DUMP,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"AVISO: no se pudo ejecutar pg_dump: {exc}")
+        return None
+
+    if resultado.returncode != 0:
+        detalle = resultado.stderr.decode("utf-8", "replace").strip()
+        print(f"AVISO: pg_dump devolvio {resultado.returncode}: {detalle[:300]}")
+        return None
+    if not resultado.stdout:
+        print("AVISO: pg_dump no devolvio datos")
+        return None
+    return resultado.stdout
+
+
 def main():
     analizador = argparse.ArgumentParser(
         description="Genera un respaldo local de la base PostgreSQL de la aplicacion."
@@ -87,6 +150,14 @@ def main():
         type=int,
         default=30,
         help="Cuantos respaldos antiguos se conservan (0 = todos).",
+    )
+    analizador.add_argument(
+        "--sin-dump",
+        action="store_true",
+        help=(
+            "No incluir base_completa.sql. El respaldo queda sin contrasenas, "
+            "como el que genera la aplicacion."
+        ),
     )
     argumentos = analizador.parse_args()
 
@@ -168,6 +239,19 @@ def main():
         "listas_globales": mapa_listas,
     }
 
+    # Copia completa de la base: es la que permite restaurar todo, incluidas
+    # las contrasenas. Si pg_dump no esta, el respaldo operativo se genera igual.
+    volcado = None
+    if not argumentos.sin_dump:
+        ruta_pg_dump = buscar_pg_dump()
+        if ruta_pg_dump:
+            volcado = volcar_base_completa(argumentos.url, ruta_pg_dump)
+        else:
+            print(
+                "AVISO: no se encontro pg_dump; el respaldo no incluira "
+                "base_completa.sql"
+            )
+
     sello = datetime.now().strftime("%Y%m%d_%H%M%S")
     nombre = f"respaldo_actividades_{sello}.zip"
     ruta = os.path.join(argumentos.destino, nombre)
@@ -196,11 +280,14 @@ def main():
         "actividades_personales": len(actividades),
         "configuraciones": len(configuraciones),
         "listas_globales": len(listas),
-        "incluye_contrasenas": False,
+        "incluye_contrasenas": bool(volcado),
+        "incluye_base_completa": bool(volcado),
         "origen": argumentos.url.split("@")[-1],
     }
 
     with zipfile.ZipFile(ruta, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        if volcado:
+            zip_file.writestr("base_completa.sql", volcado)
         zip_file.writestr("registros.csv", buffer_csv.getvalue().encode("utf-8-sig"))
         zip_file.writestr(
             "usuarios.json",
@@ -215,9 +302,18 @@ def main():
             (
                 "RESPALDO DE ACTIVIDADES\n"
                 "=======================\n\n"
-                "Este archivo contiene datos operativos de la aplicacion.\n"
-                "No contiene contrasenas ni hashes de contrasena.\n\n"
-                "Restauracion:\n"
+                "Este archivo contiene los datos operativos de la aplicacion.\n"
+                + (
+                    "Incluye base_completa.sql: copia total de la base, con los\n"
+                    "usuarios y sus contrasenas cifradas. Tratar como confidencial.\n"
+                    if volcado
+                    else "No incluye contrasenas ni hashes de contrasena.\n"
+                )
+                + "\n"
+                "Restauracion completa (recomendada; deja todo como estaba):\n"
+                "  psql \"postgresql://usuario:clave@servidor/base\" -f base_completa.sql\n"
+                "\n"
+                "Restauracion parcial, desde la web:\n"
                 "1. Registros: use 'Reemplazar todos los registros' y registros.csv\n"
                 "   convertido a .xlsx (mismos encabezados).\n"
                 "2. Usuarios, actividades y catalogos: use 'Sincronizar datos de\n"
@@ -246,6 +342,7 @@ def main():
     print(f"Respaldo generado: {ruta}")
     print(f"  registros: {len(registros)} | usuarios: {len(usuarios)} | "
           f"actividades: {len(actividades)} | listas: {len(listas)}")
+    print(f"  base completa (con contrasenas): {'si' if volcado else 'no'}")
     if eliminados:
         print(f"  respaldos antiguos eliminados: {eliminados}")
     return 0

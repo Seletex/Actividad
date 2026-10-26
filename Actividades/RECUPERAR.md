@@ -288,27 +288,61 @@ existen en ningún sitio: hay que volver a asignarlas.
 
 La aplicación web corre en un disco **efímero** (se pierde en cada
 redespliegue), así que un respaldo guardado dentro de Render no sirve de nada.
-La copia útil tiene que salir de la nube. Para eso está `respaldar_automatico.py`:
+La copia útil tiene que salir de la nube. Para eso está `respaldar_automatico.py`,
+que genera un ZIP con:
+
+- `base_completa.sql`: volcado completo hecho con `pg_dump` (registros,
+  usuarios **con sus contraseñas**, bitácora y sesiones). Es la copia que
+  permite restaurar todo tal como estaba.
+- `registros.csv`, `usuarios.json` y `manifiesto.json`: copia legible de los
+  datos operativos, para Excel o para reimportar desde la web.
+- `LEEME.txt`: instrucciones de restauración.
+
+Conserva los últimos 60 respaldos.
+
+**Instalación actual (26/10/2026).** No se guarda la URL en la tarea: la
+contiene un lanzador local, fuera del repositorio y de Git.
+
+| Elemento | Valor |
+|---|---|
+| Tarea de Windows | `Actividades - Respaldo diario` |
+| Hora | Todos los días a las 18:00 (si el PC estaba apagado, corre al encender) |
+| Lanzador | `%LOCALAPPDATA%\ActividadesData\respaldo_diario_actividades.cmd` |
+| Destino | `C:\Users\apoyosistemas\Documents\Documentos\Respaldo` (lo replica el NAS) |
+| Registro | `%LOCALAPPDATA%\ActividadesData\respaldo_actividades.log` |
+| Retención | 60 respaldos |
+
+El lanzador contiene la cadena de conexión de Neon. **Si se rota la contraseña
+de Neon, hay que actualizarla en ese archivo**; si no, el respaldo fallará y
+dejará el error en el registro.
+
+Para probarlo a mano: doble clic en el lanzador, o
+
+```powershell
+Start-ScheduledTask -TaskName "Actividades - Respaldo diario"
+Get-Content "$env:LOCALAPPDATA\ActividadesData\respaldo_actividades.log" -Tail 10
+```
+
+También se puede ejecutar suelto, por ejemplo antes de una importación grande:
 
 ```powershell
 python respaldar_automatico.py `
   --url "postgresql://LA_CONNECTION_STRING_DE_NEON" `
-  --destino "\\192.168.10.2\respaldos_actividades"
+  --destino "C:\Users\apoyosistemas\Documents\Documentos\Respaldo"
 ```
 
-Genera un ZIP con registros, usuarios, configuración y catálogos, y conserva
-los 30 últimos. Para que se ejecute solo:
+Con `--sin-dump` se omite `base_completa.sql` y el ZIP no lleva contraseñas.
+Si `pg_dump` no está en el equipo, el respaldo se genera igual, sin la copia
+completa, y lo avisa en el registro.
 
-1. Windows → **Programador de tareas** → **Crear tarea**.
-2. **General**: nombre `Respaldo Actividades`, *Ejecutar solo si el usuario
-   está conectado*.
-3. **Desencadenadores** → **Nuevo** → *Diariamente* → 22:00.
-4. **Acciones** → *Iniciar un programa*:
-   - Programa: `C:\Users\apoyosistemas\AppData\Local\Programs\Python\Python312\python.exe`
-   - Argumentos: `"C:\Users\apoyosistemas\Documents\GitDesk\Actividad\Actividades\respaldar_automatico.py" --url "postgresql://..." --destino "\\192.168.10.2\respaldos_actividades"`
-   - Iniciar en: `C:\Users\apoyosistemas\Documents\GitDesk\Actividad\Actividades`
+**Restauración completa** en una base nueva o vacía:
 
-Con eso, aunque la base se perdiera otra vez, se recupera en minutos.
+```powershell
+psql "postgresql://usuario:clave@servidor/base" -f base_completa.sql
+```
+
+El SQL se generó con `--clean --if-exists`, así que también se puede cargar
+sobre una base existente: reemplaza las tablas de la aplicación.
 
 ### 8.2 Respaldo instantáneo dentro de Neon (gratis)
 
