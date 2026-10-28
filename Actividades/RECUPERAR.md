@@ -373,3 +373,33 @@ para lo que sí puede fallar: un error de importación, un borrado accidental.
 - La caída de la base **no** muestra "Contraseña incorrecta" ni bloquea la IP.
 - El respaldo que genera la web se puede descargar en cualquier momento desde
   *Gestión → Descargar respaldo ZIP*.
+
+### 8.5 Subir las actividades que quedaron solo en un equipo
+
+Cuando la conexión falla, la aplicación sigue guardando en el `actividades.db`
+de cada equipo. Para traer esas actividades a Neon sin repetir las que ya están:
+
+```powershell
+cd C:\Users\apoyosistemas\Documents\GitDesk\Actividad\Actividades
+$env:DATABASE_URL="postgresql://LA_CONNECTION_STRING_DE_NEON"
+
+# 1) Ensayo: solo informa, no escribe nada
+python importar_faltantes.py --carpeta "C:\Escaner"
+
+# 2) Subida real (antes crea un respaldo con pg_dump)
+python importar_faltantes.py --carpeta "C:\Escaner" --aplicar
+```
+
+Se revisan las subcarpetas `Manolo`, `Juan` y `Freddy`. La comparación ignora
+mayúsculas, tildes y espacios de más, compara la fecha por día y respeta la
+cantidad (si el equipo tiene dos iguales y la nube una, sube una). Al terminar
+comprueba que ya no falte nada y avisa si queda algún registro.
+
+Si un registro ya está en Neon con otro texto, se puede dejar fuera:
+
+```powershell
+python importar_faltantes.py --carpeta "C:\Escaner" --aplicar --excluir "Freddy:3950"
+```
+
+Las carpetas se pueden cambiar con `--usuario "Carpeta=Usuario"` y el destino
+del respaldo previo con `--destino-respaldo`.
