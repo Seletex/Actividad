@@ -690,7 +690,7 @@ def actualizar_registro_accion():
     fecha_atencion = _fecha_valida(request.form.get('fecha_atencion', ''))
 
     datos = {
-        'TIPO DE ACTIVIDAD': sanitizar(request.form.get('actividad'), 200),
+        'TIPO DE ACTIVIDAD': sanitizar(request.form.get('actividad'), 2000),
         'DEPENDENCIA': sanitizar(request.form.get('ubicacion'), 120),
         'SOLICITANTE': sanitizar(request.form.get('solicitante'), 120),
         'TIPO DE SOLICITUD': sanitizar(request.form.get('tipo_solicitud'), 120),
@@ -1012,7 +1012,7 @@ def agregar_registro():
     registro = {
         'USUARIO': usuario_actual,
         'FECHA': fecha_con_hora,
-        'TIPO DE ACTIVIDAD': sanitizar(request.form.get('actividad'), 200),
+        'TIPO DE ACTIVIDAD': sanitizar(request.form.get('actividad'), 2000),
         'DEPENDENCIA': sanitizar(request.form.get('ubicacion'), 120),
         'SOLICITANTE': sanitizar(request.form.get('solicitante'), 120),
         'TIPO DE SOLICITUD': sanitizar(request.form.get('tipo_solicitud'), 120),

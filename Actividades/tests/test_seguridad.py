@@ -49,6 +49,35 @@ class TestEscapeDeHtml:
         assert "<script>alert(2)" not in html
 
 
+class TestActividadCompleta:
+    """La actividad no debe quedar cortada al guardarla desde la web."""
+
+    def test_guarda_la_actividad_larga_sin_recortarla(self, cliente, iniciar_sesion,
+                                                      token_csrf, db):
+        iniciar_sesion()
+        actividad = ("1. " + ("Actividad muy larga para probar el limite. " * 10)).strip()
+        assert len(actividad) > 200
+
+        respuesta = cliente.post("/agregar_registro", data={
+            "actividad": actividad,
+            "ubicacion": "CATASTRO",
+            "solicitante": "Prueba texto completo",
+            "tipo_solicitud": "Soporte técnico",
+            "medio_solicitud": "Presencial",
+            "cumplido": "Sí",
+            "fecha_atencion": "2026-10-30",
+            "descripcion": "Descripcion",
+            "observaciones": "Observaciones",
+            "csrf_token": token_csrf(),
+        })
+        assert respuesta.status_code == 302
+
+        registros = db.cargar_registros("tester")
+        filas = registros[registros["SOLICITANTE"] == "Prueba texto completo"]
+        assert len(filas) == 1
+        assert filas.iloc[0]["TIPO DE ACTIVIDAD"] == actividad
+
+
 class TestFormulasEnExportaciones:
     def test_se_neutralizan_las_formulas(self):
         import pandas as pd

@@ -21,6 +21,14 @@ pyvenv.cfg
 logs/
 *.log
 
+# Versión PHP: datos personales y configuración local
+php/datos/
+php/config.local.php
+php/sql/datos_iniciales.sql
+
 # Carpetas de herramientas específicas
 .zencoder/
 .zenflow/
+
+# Informe con datos personales de la reparación de actividades
+Actividades/reparacion_actividades.json
