@@ -1546,7 +1546,7 @@ def guardar_datos_contrato():
 @csrf_protect
 def agregar_actividad_global():
     ip = _ip_cliente()
-    item = sanitizar(request.form.get('nuevo_item'), 200)
+    item = sanitizar(request.form.get('nuevo_item'), 2000)
     if item:
         act = cargar_actividades_globales()
         if item not in act:
@@ -1562,7 +1562,7 @@ def agregar_actividad_global():
 @csrf_protect
 def eliminar_actividad_global():
     ip = _ip_cliente()
-    item = sanitizar(request.form.get('actividad'), 200)
+    item = sanitizar(request.form.get('actividad'), 2000)
     if item:
         act = cargar_actividades_globales()
         if item in act:

@@ -78,6 +78,35 @@ class TestActividadCompleta:
         assert filas.iloc[0]["TIPO DE ACTIVIDAD"] == actividad
 
 
+class TestActividadGlobalCompleta:
+    """El catálogo global también admite actividades de más de 200 letras."""
+
+    def test_agrega_y_elimina_una_actividad_global_larga(self, como_admin,
+                                                         token_csrf, db):
+        actividad = ("9. " + ("Actividad global larga para probar el limite. " * 8)).strip()
+        assert len(actividad) > 200
+        try:
+            respuesta = como_admin.post("/agregar_actividad_global", data={
+                "nuevo_item": actividad,
+                "csrf_token": token_csrf(),
+            })
+            assert respuesta.status_code == 302
+            assert actividad in db.cargar_actividades_globales()
+
+            respuesta = como_admin.post("/eliminar_actividad_global", data={
+                "actividad": actividad,
+                "csrf_token": token_csrf(),
+            })
+            assert respuesta.status_code == 302
+            assert actividad not in db.cargar_actividades_globales()
+        finally:
+            # Si una comprobación falló, no dejar basura para las demás pruebas.
+            actividades = db.cargar_actividades_globales()
+            if actividad in actividades:
+                actividades.remove(actividad)
+                db.guardar_actividades(actividades)
+
+
 class TestFormulasEnExportaciones:
     def test_se_neutralizan_las_formulas(self):
         import pandas as pd
