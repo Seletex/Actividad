@@ -122,6 +122,7 @@ class TestEstadoDelServicio:
         assert datos["servicio"] == "ok"
         assert datos["base_datos"] == "ok"
         assert isinstance(datos["registros"], int)
+        assert isinstance(datos["version"], str) and datos["version"]
 
     def test_salud_avisa_cuando_la_base_no_responde(self, app, cliente, monkeypatch):
         import database

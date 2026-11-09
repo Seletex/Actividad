@@ -519,6 +519,8 @@ def salud():
         "servicio": "ok",
         "base_datos": "ok",
         "registros": 0,
+        # En Render permite confirmar qué commit está desplegado.
+        "version": (os.environ.get("RENDER_GIT_COMMIT") or "local")[:7],
     }
     codigo = 200
     try:
