@@ -5,6 +5,7 @@ Implementa la misma interfaz que database.py pero usando SQLite.
 """
 
 import os
+import re
 import json
 import uuid
 import hashlib
@@ -329,7 +330,43 @@ def inicializar_tablas():
             cursor.execute(
                 "UPDATE registros SET borrado = 0 WHERE borrado IS NULL"
             )
-        
+
+        # 5b. Mesa de ayuda: tickets radicados desde el portal publico.
+        # Es la misma tabla que usa la version PHP, pero con tipos compatibles
+        # con SQLite y PostgreSQL (texto libre en lugar de VARCHAR/MySQL).
+        tickets_query = """
+            CREATE TABLE IF NOT EXISTS tickets (
+                id SERIAL PRIMARY KEY,
+                radicado TEXT NOT NULL UNIQUE,
+                dependencia TEXT NOT NULL,
+                solicitante TEXT NOT NULL,
+                correo TEXT,
+                telefono TEXT,
+                tipo_solicitud TEXT NOT NULL,
+                prioridad TEXT NOT NULL DEFAULT 'Media',
+                descripcion TEXT NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'Pendiente',
+                tecnico_asignado TEXT,
+                tecnicos_colaboradores TEXT,
+                solucion TEXT,
+                fecha_creacion TEXT NOT NULL,
+                fecha_atencion TEXT,
+                fecha_cierre TEXT,
+                actividades_ids TEXT
+            )
+        """
+        if not DATABASE_URL:
+            tickets_query = tickets_query.replace(
+                "SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT"
+            )
+        cursor.execute(fix_query(tickets_query))
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tickets_estado ON tickets (estado)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tickets_fecha ON tickets (fecha_creacion)"
+        )
+
         # 6. Asegurar usuario admin
         if DATABASE_URL:
             cursor.execute("INSERT INTO usuarios (username) VALUES (%s) ON CONFLICT DO NOTHING", ('admin',))
@@ -1897,3 +1934,387 @@ def actualizar_registro(id_registro, data, usuario):
             sincronizar_excel()
         except Exception:
             pass
+
+
+# =============================================================================
+# MESA DE AYUDA / TICKETS
+# =============================================================================
+# La mesa de ayuda comparte la misma base y los mismos usuarios que las
+# actividades. Un ticket resuelto genera una actividad oficial por cada
+# tecnico que participo, igual que en la version PHP.
+
+_TICKET_PRIORIDADES = ("Baja", "Media", "Alta", "Urgente")
+_TICKET_ESTADOS = ("Pendiente", "En proceso", "Resuelto")
+ACTIVIDAD_TICKET_DEFAULT = "Soporte técnico y mantenimiento"
+
+
+def _ticket_texto(valor, limite):
+    """Limpia y recorta un dato de la mesa de ayuda."""
+    if valor is None:
+        return ""
+    texto = re.sub(r"<[^>]*>", "", str(valor)).replace("\x00", "").strip()
+    return texto[:limite]
+
+
+def _ticket_dict(fila):
+    """Convierte una fila de SQLite o PostgreSQL en diccionario."""
+    if fila is None:
+        return None
+    if isinstance(fila, dict):
+        return dict(fila)
+    try:
+        return {clave: fila[clave] for clave in fila.keys()}
+    except Exception:
+        return dict(fila)
+
+
+def _ticket_generar_radicado():
+    """Genera un radicado legible: TK-202611-0145."""
+    prefijo = datetime.now().strftime("TK-%Y%m-")
+    return prefijo + f"{random.randint(1, 9999):04d}"
+
+
+def ticket_crear(datos):
+    """Registra un ticket nuevo. Devuelve el ticket creado como diccionario."""
+    datos = datos or {}
+    prioridad = datos.get("prioridad")
+    if prioridad not in _TICKET_PRIORIDADES:
+        prioridad = "Media"
+
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    campos = {
+        "dependencia": _ticket_texto(datos.get("dependencia"), 150),
+        "solicitante": _ticket_texto(datos.get("solicitante"), 150),
+        "correo": _ticket_texto(datos.get("correo"), 150),
+        "telefono": _ticket_texto(datos.get("telefono"), 50),
+        "tipo_solicitud": _ticket_texto(datos.get("tipo_solicitud"), 150),
+        "prioridad": prioridad,
+        "descripcion": _ticket_texto(datos.get("descripcion"), 2000),
+        "estado": "Pendiente",
+        "fecha_creacion": ahora,
+    }
+
+    insert = """
+        INSERT INTO tickets (
+            radicado, dependencia, solicitante, correo, telefono,
+            tipo_solicitud, prioridad, descripcion, estado, fecha_creacion
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    ultimo_error = None
+    for _ in range(12):
+        radicado = _ticket_generar_radicado()
+        valores = (
+            radicado,
+            campos["dependencia"],
+            campos["solicitante"],
+            campos["correo"],
+            campos["telefono"],
+            campos["tipo_solicitud"],
+            campos["prioridad"],
+            campos["descripcion"],
+            campos["estado"],
+            campos["fecha_creacion"],
+        )
+        try:
+            with db_session() as conn:
+                cursor = get_cursor(conn)
+                if DATABASE_URL:
+                    cursor.execute(fix_query(insert) + " RETURNING id", valores)
+                    nuevo_id = cursor.fetchone()["id"]
+                else:
+                    cursor.execute(fix_query(insert), valores)
+                    nuevo_id = cursor.lastrowid
+            creado = dict(campos)
+            creado["id"] = nuevo_id
+            creado["radicado"] = radicado
+            return creado
+        except Exception as e:
+            ultimo_error = e
+            mensaje = str(e).lower()
+            if "unique" not in mensaje and "duplicate" not in mensaje:
+                logger.error(f"Error creando ticket: {e}")
+                raise
+            # Choque de radicado: probar otro numero.
+            continue
+
+    # Caso extremo: usar entropia adicional para no perder la solicitud.
+    radicado = _ticket_generar_radicado() + "-" + uuid.uuid4().hex[:4].upper()
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            valores = (
+                radicado,
+                campos["dependencia"],
+                campos["solicitante"],
+                campos["correo"],
+                campos["telefono"],
+                campos["tipo_solicitud"],
+                campos["prioridad"],
+                campos["descripcion"],
+                campos["estado"],
+                campos["fecha_creacion"],
+            )
+            if DATABASE_URL:
+                cursor.execute(fix_query(insert) + " RETURNING id", valores)
+                nuevo_id = cursor.fetchone()["id"]
+            else:
+                cursor.execute(fix_query(insert), valores)
+                nuevo_id = cursor.lastrowid
+        creado = dict(campos)
+        creado["id"] = nuevo_id
+        creado["radicado"] = radicado
+        return creado
+    except Exception:
+        logger.error(f"Error creando ticket tras varios intentos: {ultimo_error}")
+        raise
+
+
+def ticket_obtener_por_radicado(radicado):
+    """Busca un ticket por su codigo de radicado (sin distinguir mayusculas)."""
+    radicado = _ticket_texto(radicado, 40).upper()
+    if not radicado:
+        return None
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query("SELECT * FROM tickets WHERE UPPER(radicado) = ?"),
+                (radicado,),
+            )
+            return _ticket_dict(cursor.fetchone())
+    except Exception as e:
+        logger.error(f"Error consultando ticket {radicado}: {e}")
+        return None
+
+
+def ticket_obtener_por_id(id_ticket):
+    """Busca un ticket por su identificador numerico."""
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query("SELECT * FROM tickets WHERE id = ?"),
+                (int(id_ticket),),
+            )
+            return _ticket_dict(cursor.fetchone())
+    except Exception as e:
+        logger.error(f"Error consultando ticket {id_ticket}: {e}")
+        return None
+
+
+def ticket_listar(estado="Todos", limite=200):
+    """Lista tickets, priorizando pendientes y luego los mas recientes."""
+    try:
+        consulta = "SELECT * FROM tickets"
+        parametros = []
+        if estado and estado != "Todos" and estado in _TICKET_ESTADOS:
+            consulta += " WHERE estado = ?"
+            parametros.append(estado)
+        consulta += (
+            " ORDER BY CASE estado WHEN 'Pendiente' THEN 1 "
+            "WHEN 'En proceso' THEN 2 ELSE 3 END, fecha_creacion DESC"
+        )
+        consulta += " LIMIT ?"
+        parametros.append(int(limite))
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(fix_query(consulta), tuple(parametros))
+            return [_ticket_dict(fila) for fila in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Error listando tickets: {e}")
+        return []
+
+
+def ticket_contar_estados():
+    """Cuenta tickets por estado para las tarjetas de resumen."""
+    resumen = {"Pendiente": 0, "En proceso": 0, "Resuelto": 0}
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                "SELECT estado, COUNT(*) AS c FROM tickets GROUP BY estado"
+            )
+            for fila in cursor.fetchall():
+                datos = _ticket_dict(fila)
+                if datos and datos.get("estado") in resumen:
+                    resumen[datos["estado"]] = int(datos.get("c") or 0)
+    except Exception as e:
+        logger.error(f"Error contando tickets: {e}")
+    return resumen
+
+
+def ticket_conteo_pendientes():
+    """Cantidad de tickets pendientes o en proceso (para el menu)."""
+    resumen = ticket_contar_estados()
+    return resumen.get("Pendiente", 0) + resumen.get("En proceso", 0)
+
+
+def ticket_tomar(id_ticket, tecnico, ip=""):
+    """Asigna un ticket al tecnico y lo deja en proceso."""
+    ticket = ticket_obtener_por_id(id_ticket)
+    if not ticket:
+        return False
+    if ticket.get("estado") == "Resuelto":
+        # Un ticket cerrado no se puede reabrir desde la bandeja: eso
+        # duplicaria las actividades ya generadas en el informe.
+        return False
+
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            cursor.execute(
+                fix_query(
+                    "UPDATE tickets SET estado = 'En proceso', "
+                    "tecnico_asignado = ?, "
+                    "fecha_atencion = COALESCE(fecha_atencion, ?) "
+                    "WHERE id = ?"
+                ),
+                (tecnico, ahora, int(id_ticket)),
+            )
+        registrar_auditoria(
+            tecnico,
+            "TICKET_TOMAR",
+            "Tomó el ticket " + str(ticket.get("radicado", "")),
+            ip,
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error tomando ticket {id_ticket}: {e}")
+        return False
+
+
+def ticket_resolver(id_ticket, tecnico_principal, datos):
+    """Resuelve un ticket y crea una actividad oficial por cada tecnico.
+
+    Devuelve ``(True, mensaje)`` o ``(False, error)``. Todo se guarda en una
+    sola transaccion: si falla la creacion de actividades no se cierra el
+    ticket a medias.
+    """
+    datos = datos or {}
+    ticket = ticket_obtener_por_id(id_ticket)
+    if not ticket:
+        return False, "Ticket no encontrado"
+    if ticket.get("estado") == "Resuelto":
+        return False, "Este ticket ya fue resuelto y no se puede cerrar dos veces"
+
+    solucion = _ticket_texto(datos.get("solucion"), 4000)
+    if not solucion:
+        return False, "Debe especificar el detalle de la solución brindada"
+
+    tipo_actividad = _ticket_texto(datos.get("tipo_actividad"), 500)
+
+    colaboradores = datos.get("colaboradores") or []
+    if isinstance(colaboradores, str):
+        colaboradores = [colaboradores]
+    colaboradores_limpios = []
+    for nombre in colaboradores:
+        nombre = _ticket_texto(nombre, 50)
+        if (
+            nombre
+            and nombre != tecnico_principal
+            and nombre not in colaboradores_limpios
+        ):
+            colaboradores_limpios.append(nombre)
+
+    todos = [tecnico_principal] + colaboradores_limpios
+
+    fecha_actividad = _ticket_texto(datos.get("fecha_actividad"), 10)
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha_actividad):
+        fecha_actividad = datetime.now().strftime("%Y-%m-%d")
+
+    observaciones = (
+        "Ubicación: "
+        + str(ticket.get("dependencia", ""))
+        + " | Solicitud: "
+        + str(ticket.get("descripcion", ""))
+        + " | Solución: "
+        + solucion
+    )
+    if colaboradores_limpios:
+        observaciones += " | Técnicos participantes: " + ", ".join(todos)
+
+    # La actividad que quedara en el informe de cada tecnico.
+    actividad_por_tecnico = {}
+    for tecnico in todos:
+        if tipo_actividad:
+            actividad_por_tecnico[tecnico] = tipo_actividad
+        else:
+            personales = cargar_actividades(tecnico)
+            actividad_por_tecnico[tecnico] = (
+                personales[0] if personales else ACTIVIDAD_TICKET_DEFAULT
+            )
+
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    hora = datetime.now().strftime("%H:%M:%S")
+    insert = """
+        INSERT INTO registros (
+            usuario, tipo_actividad, fecha, dependencia, solicitante,
+            tipo_solicitud, medio_solicitud, descripcion, cumplido,
+            fecha_atencion, observaciones, sync_uid, updated_at, borrado
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    ids_creados = []
+
+    try:
+        with db_session() as conn:
+            cursor = get_cursor(conn)
+            for tecnico in todos:
+                valores = (
+                    tecnico,
+                    actividad_por_tecnico[tecnico],
+                    fecha_actividad + " " + hora,
+                    ticket.get("dependencia", ""),
+                    ticket.get("solicitante", ""),
+                    ticket.get("tipo_solicitud", ""),
+                    "Mesa de Ayuda Web",
+                    ticket.get("descripcion", ""),
+                    "Sí",
+                    fecha_actividad,
+                    observaciones,
+                    uuid.uuid4().hex,
+                    ahora,
+                    0,
+                )
+                if DATABASE_URL:
+                    cursor.execute(fix_query(insert) + " RETURNING id", valores)
+                    fila = cursor.fetchone()
+                    ids_creados.append(fila["id"])
+                else:
+                    cursor.execute(fix_query(insert), valores)
+                    ids_creados.append(cursor.lastrowid)
+
+            cursor.execute(
+                fix_query(
+                    "UPDATE tickets SET estado = 'Resuelto', "
+                    "tecnico_asignado = ?, tecnicos_colaboradores = ?, "
+                    "solucion = ?, fecha_cierre = ?, actividades_ids = ? "
+                    "WHERE id = ?"
+                ),
+                (
+                    tecnico_principal,
+                    json.dumps(colaboradores_limpios, ensure_ascii=False),
+                    solucion,
+                    ahora,
+                    ",".join(str(i) for i in ids_creados),
+                    int(id_ticket),
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Error resolviendo ticket {id_ticket}: {e}")
+        return False, "No se pudo resolver el ticket. Intente nuevamente."
+
+    registrar_auditoria(
+        tecnico_principal,
+        "TICKET_RESOLVER",
+        "Ticket "
+        + str(ticket.get("radicado", ""))
+        + " resuelto. Actividades generadas: "
+        + str(len(ids_creados)),
+        "",
+    )
+    return (
+        True,
+        f"Ticket resuelto y {len(ids_creados)} actividad(es) oficial(es) registrada(s).",
+    )

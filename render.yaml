@@ -1,22 +1,36 @@
+# Configuracion de Render (Blueprint).
+#
+# Publica la MISMA aplicacion dos veces (dos servicios web) para que compartan
+# la misma base de datos Neon y los mismos usuarios. Si uno se cae o se queda
+# sin cupo, el otro sigue atendiendo con los mismos datos.
+#
+# Importante: la base NO vive en Render, vive en Neon (plan gratuito, no
+# caduca). Por eso aqui no se declara ninguna base de datos de Render.
+#
+# Nota para Render: este archivo se usa solo si el Blueprint se crea desde la
+# raiz del repositorio. La version equivalente dentro de Actividades/render.yaml
+# es la misma configuracion, por si el Blueprint se creo desde esa carpeta.
+
 services:
+  # ---------------------------------------------------------------------------
+  # Instancia 1: aplicacion principal (actividades + mesa de ayuda)
+  # ---------------------------------------------------------------------------
   - type: web
     name: actividades-app
     env: python
+    plan: free
     rootDir: Actividades
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --config gunicorn_config.py
+    healthCheckPath: /salud
     envVars:
-      # La base de datos NO vive en Render: vive en Neon (plan gratuito).
-      #
-      # Por que: las bases PostgreSQL gratuitas de Render caducan a los 30
-      # dias y Render las elimina con todos sus datos, sin conservar copia.
-      # Ya se perdio la base de este proyecto por esa causa (22/09/2026 -
-      # 22/10/2026). En Neon la base no caduca nunca.
-      #
-      # Al desplegar, Render pide este valor: pegue la "Connection string"
-      # DIRECTA de Neon (la que NO lleva "-pooler" en el nombre del servidor).
+      # Pegue aqui la "Connection string" DIRECTA de Neon (la que NO lleva
+      # "-pooler" en el nombre del servidor).
       - key: DATABASE_URL
         sync: false
+      # Clave para firmar la cookie de sesion. Las DOS instancias deben usar la
+      # MISMA clave para que un tecnico pueda pasar de una a otra sin volver a
+      # iniciar sesion.
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: PYTHON_VERSION
@@ -25,7 +39,61 @@ services:
         value: "true"
       - key: TRUST_PROXY
         value: "true"
+      # URL publica que se usa en los enlaces de Telegram y correo.
+      - key: PUBLIC_URL
+        value: https://actividad-0c88.onrender.com
+      # Notificaciones. Los valores ya existen en php/config.local.php; se
+      # pegan en el panel de Render (Environment) y NO se guardan en Git.
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER
+        sync: false
+      - key: BREVO_SENDER_NAME
+        value: Soporte TI
 
-# No se declara ninguna base de datos de Render a proposito: el proyecto usa
-# Neon. Declarar aqui una base gratuita de Render reintroduciria el problema
-# de la caducidad a los 30 dias.
+  # ---------------------------------------------------------------------------
+  # Instancia 2: misma aplicacion y misma base, para continuidad.
+  # Comparte DATABASE_URL y FLASK_SECRET_KEY con la instancia 1.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: mesa-ayuda-app
+    env: python
+    plan: free
+    rootDir: Actividades
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --config gunicorn_config.py
+    healthCheckPath: /salud
+    envVars:
+      - key: DATABASE_URL
+        fromService:
+          type: web
+          name: actividades-app
+          envVarKey: DATABASE_URL
+      # Misma clave que la instancia 1: las sesiones son validas en ambas.
+      - key: FLASK_SECRET_KEY
+        fromService:
+          type: web
+          name: actividades-app
+          envVarKey: FLASK_SECRET_KEY
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      # Sin PUBLIC_URL: la app usa RENDER_EXTERNAL_URL y los enlaces apuntan
+      # solos a esta segunda instancia.
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER
+        sync: false
+      - key: BREVO_SENDER_NAME
+        value: Soporte TI

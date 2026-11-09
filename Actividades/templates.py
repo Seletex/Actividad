@@ -95,6 +95,9 @@ _SIDEBAR_TEMPLATE = """
                 <a href="/exportar" class="list-group-item list-group-item-action {active_exportar}">
                     <i class="fas fa-file-export me-2 text-primary"></i> Exportar
                 </a>
+                <a href="/tickets" class="list-group-item list-group-item-action">
+                    <i class="fas fa-headset me-2 text-primary"></i> Mesa de Ayuda
+                </a>
             </div>
         </div>
     </div>
@@ -127,6 +130,9 @@ _NAVBAR_TEMPLATE = """
                     </li>
                     <li class="nav-item">
                         <a class="nav-link text-white" href="/exportar"><i class="fas fa-file-export me-2"></i> Exportar</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link text-white" href="/tickets"><i class="fas fa-headset me-2"></i> Mesa de Ayuda</a>
                     </li>
                 </ul>
 

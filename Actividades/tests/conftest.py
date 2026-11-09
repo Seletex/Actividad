@@ -154,6 +154,7 @@ def datos_limpios(db, modulo_app):
     No toca usuarios ni configuracion: cada prueba define los que necesita.
     """
     ejecutar(db, "DELETE FROM registros")
+    ejecutar(db, "DELETE FROM tickets")
     ejecutar(db, "DELETE FROM sesiones")
     assert db.cargar_registros(None).empty, "la limpieza no dejo registros"
     yield

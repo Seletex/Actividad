@@ -39,7 +39,17 @@ from database import (
     usuario_debe_cambiar_contrasena, marcar_debe_cambiar_contrasena,
     registrar_auditoria, obtener_bitacora, limpiar_bitacora,
     registrar_sesion, sesion_es_valida, revocar_sesiones, revocar_token_sesion,
-    listar_sesiones, purgar_sesiones_antiguas
+    listar_sesiones, purgar_sesiones_antiguas,
+    ticket_crear, ticket_obtener_por_radicado, ticket_obtener_por_id,
+    ticket_listar, ticket_contar_estados, ticket_conteo_pendientes,
+    ticket_tomar, ticket_resolver
+)
+from ticket_notifications import (
+    notificar_ticket_nuevo, notificar_ticket_resuelto
+)
+from ticket_templates import (
+    DEPENDENCIAS_OFICIALES, TIPOS_SOLICITUD_MESA_AYUDA,
+    render_portal_tickets, render_gestion_tickets, TICKETS_PAGE
 )
 from web_security import (
     generar_csrf_token, csrf_protect, login_bloqueado,
@@ -1927,6 +1937,232 @@ def exportar():
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+# =============================================================================
+# MESA DE AYUDA (PORTAL PÚBLICO Y GESTIÓN POR TÉCNICOS)
+# =============================================================================
+
+def _alertas_tickets():
+    """Mensajes de resultado para la bandeja de tickets."""
+    alertas = ""
+    if request.args.get('msg'):
+        alertas = (
+            '<div class="alert alert-success alert-dismissible fade show">✅ '
+            + html.escape(str(request.args.get('msg')))
+            + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>'
+        )
+    elif request.args.get('error'):
+        alertas = (
+            '<div class="alert alert-danger alert-dismissible fade show">❌ '
+            + html.escape(str(request.args.get('error')))
+            + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>'
+        )
+    return alertas
+
+
+def _lista_dependencias_tickets():
+    valores = list(DEPENDENCIAS_OFICIALES)
+    try:
+        valores.extend(cargar_ubicaciones())
+    except Exception:
+        logger.warning("No se pudieron cargar las ubicaciones para la mesa de ayuda")
+    vistos = set()
+    limpias = []
+    for valor in valores:
+        texto = str(valor or "").strip()
+        clave = texto.casefold()
+        if texto and clave not in vistos:
+            vistos.add(clave)
+            limpias.append(texto)
+    return sorted(limpias, key=lambda v: v.casefold())
+
+
+def _lista_tipos_tickets():
+    valores = list(TIPOS_SOLICITUD_MESA_AYUDA)
+    try:
+        valores.extend(cargar_tipos_solicitud())
+    except Exception:
+        logger.warning("No se pudieron cargar los tipos de solicitud para la mesa de ayuda")
+    vistos = set()
+    limpias = []
+    for valor in valores:
+        texto = str(valor or "").strip()
+        clave = texto.casefold()
+        if texto and clave not in vistos:
+            vistos.add(clave)
+            limpias.append(texto)
+    return limpias
+
+
+@app.route('/ticket', methods=['GET', 'POST'])
+def ticket_portal():
+    """Portal público: radicar una solicitud o consultar un radicado."""
+    error = ""
+    ticket_creado = None
+    ticket_consultado = None
+    radicado_buscado = sanitizar(request.args.get('radicado'), 40)
+    pestana = 'consultar' if (radicado_buscado or request.args.get('consultar')) else 'radicar'
+
+    if request.method == 'POST':
+        accion = request.form.get('accion', '')
+        if accion == 'crear_ticket':
+            if not _csrf_ok():
+                error = 'La sesión expiró por inactividad. Por favor intente nuevamente.'
+            else:
+                dependencia = sanitizar(request.form.get('dependencia'), 150)
+                solicitante = sanitizar(request.form.get('solicitante'), 150)
+                tipo_solicitud = sanitizar(request.form.get('tipo_solicitud'), 150)
+                descripcion = sanitizar(request.form.get('descripcion'), 2000)
+                if not (dependencia and solicitante and tipo_solicitud and descripcion):
+                    error = 'Por favor complete todos los campos obligatorios (*).'
+                else:
+                    try:
+                        ticket_creado = ticket_crear({
+                            'dependencia': dependencia,
+                            'solicitante': solicitante,
+                            'tipo_solicitud': tipo_solicitud,
+                            'descripcion': descripcion,
+                            'telefono': sanitizar(request.form.get('telefono'), 50),
+                            'correo': sanitizar(request.form.get('correo'), 150),
+                            'prioridad': sanitizar(request.form.get('prioridad'), 20) or 'Media',
+                        })
+                        registrar_auditoria(
+                            solicitante or 'portal',
+                            'TICKET_CREADO',
+                            'Radicó el ticket ' + str(ticket_creado.get('radicado', '')),
+                            _ip_cliente(),
+                        )
+                        try:
+                            notificar_ticket_nuevo(ticket_creado)
+                        except Exception:
+                            logger.warning("No se pudo notificar el ticket nuevo", exc_info=True)
+                    except Exception:
+                        logger.exception("Error registrando ticket desde el portal público")
+                        error = 'No se pudo registrar la solicitud. Intente nuevamente.'
+            pestana = 'radicar'
+
+    if radicado_buscado:
+        try:
+            ticket_consultado = ticket_obtener_por_radicado(radicado_buscado)
+            if not ticket_consultado and not error:
+                error = 'No se encontró ninguna solicitud con el radicado: ' + radicado_buscado
+        except Exception:
+            logger.exception("Error consultando radicado %s", radicado_buscado)
+            error = 'Error al consultar el radicado. Intente nuevamente.'
+        pestana = 'consultar'
+
+    page = render_portal_tickets(
+        _lista_dependencias_tickets(),
+        _lista_tipos_tickets(),
+        error=error,
+        ticket_creado=ticket_creado,
+        ticket_consultado=ticket_consultado,
+        radicado_buscado=radicado_buscado,
+        pestana=pestana,
+    )
+    return _inyectar_csrf(page)
+
+
+@app.route('/tickets', methods=['GET'])
+@login_required
+@cambio_requerido
+def tickets():
+    """Bandeja de la mesa de ayuda para los técnicos."""
+    usuario_actual = session.get('usuario')
+    filtro = request.args.get('estado', 'Todos')
+    if filtro not in ('Todos', 'Pendiente', 'En proceso', 'Resuelto'):
+        filtro = 'Todos'
+
+    lista = ticket_listar(filtro, 200)
+    resumen = ticket_contar_estados()
+    usuarios = sorted(cargar_usuarios().get('usuarios', []), key=lambda v: str(v).casefold())
+
+    actividades = cargar_actividades(usuario_actual)
+    if not actividades:
+        actividades = [
+            'Soporte técnico y mantenimiento preventivo/correctivo',
+            'Configuración de impresoras, escáneres y periféricos',
+            'Soporte y configuración de redes e internet',
+            'Gestión de usuarios, contraseñas y permisos de acceso',
+            'Instalación y actualización de software y suites de oficina',
+            'Atención a requerimientos de infraestructura tecnológica',
+        ]
+
+    contenido = render_gestion_tickets(
+        lista, usuarios, usuario_actual, actividades, filtro, resumen
+    )
+    page = (
+        TICKETS_PAGE.replace('__USUARIO__', html.escape(str(usuario_actual or '')))
+        .replace('__ALERTAS__', _alertas_tickets())
+        .replace('__CONTENIDO__', contenido)
+    )
+    return _inyectar_csrf(page)
+
+
+@app.route('/ticket_tomar', methods=['POST'])
+@login_required
+@cambio_requerido
+def ticket_tomar_route():
+    """Asigna el ticket al técnico que lo toma."""
+    if not _csrf_ok():
+        return redirect(url_for('tickets', error='Sesión expirada o token inválido'))
+    try:
+        id_ticket = int(request.form.get('id', '0'))
+    except (TypeError, ValueError):
+        id_ticket = 0
+    if id_ticket <= 0:
+        return redirect(url_for('tickets', error='Ticket inválido'))
+
+    usuario_actual = session.get('usuario')
+    if ticket_tomar(id_ticket, usuario_actual, _ip_cliente()):
+        return redirect(url_for('tickets', msg='Ha tomado el ticket. Ahora está en atención.'))
+    return redirect(url_for('tickets', error='No se pudo tomar el ticket'))
+
+
+@app.route('/ticket_resolver', methods=['POST'])
+@login_required
+@cambio_requerido
+def ticket_resolver_route():
+    """Resuelve el ticket y genera las actividades oficiales."""
+    if not _csrf_ok():
+        return redirect(url_for('tickets', error='Sesión expirada o token inválido'))
+    try:
+        id_ticket = int(request.form.get('id', '0'))
+    except (TypeError, ValueError):
+        id_ticket = 0
+    if id_ticket <= 0:
+        return redirect(url_for('tickets', error='Ticket inválido'))
+
+    usuario_actual = session.get('usuario')
+    solucion = sanitizar(request.form.get('solucion'), 4000)
+    tipo_actividad = sanitizar(request.form.get('tipo_actividad'), 500)
+    fecha_actividad = sanitizar(request.form.get('fecha_actividad'), 10)
+    colaboradores = request.form.getlist('colaboradores')
+
+    ok, mensaje = ticket_resolver(
+        id_ticket,
+        usuario_actual,
+        {
+            'solucion': solucion,
+            'tipo_actividad': tipo_actividad,
+            'fecha_actividad': fecha_actividad,
+            'colaboradores': colaboradores,
+        },
+    )
+    if not ok:
+        return redirect(url_for('tickets', error=mensaje))
+
+    try:
+        ticket_actualizado = ticket_obtener_por_id(id_ticket) or {}
+        todos = [usuario_actual] + [
+            c for c in colaboradores if c and c != usuario_actual
+        ]
+        notificar_ticket_resuelto(ticket_actualizado, usuario_actual, todos, solucion)
+    except Exception:
+        logger.warning("No se pudo notificar el ticket resuelto", exc_info=True)
+
+    return redirect(url_for('tickets', msg=mensaje))
 
 
 def _csrf_ok():
