@@ -26,9 +26,10 @@ services:
       # "-pooler" en el nombre del servidor).
       - key: DATABASE_URL
         sync: false
-      # Clave para firmar la cookie de sesion. Las DOS instancias deben usar la
-      # MISMA clave para que un tecnico pueda pasar de una a otra sin volver a
-      # iniciar sesion.
+      # Clave para firmar la cookie de sesion. Se copia igual a la segunda
+      # instancia para simplificar la administracion. Cada URL tiene su propia
+      # cookie, asi que en el respaldo se inicia sesion aparte (los datos y los
+      # usuarios son los mismos).
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: PYTHON_VERSION
@@ -70,7 +71,7 @@ services:
           type: web
           name: actividades-app
           envVarKey: DATABASE_URL
-      # Misma clave que la instancia 1: las sesiones son validas en ambas.
+      # Misma clave que la instancia 1 (cada URL conserva su propia cookie).
       - key: FLASK_SECRET_KEY
         fromService:
           type: web
