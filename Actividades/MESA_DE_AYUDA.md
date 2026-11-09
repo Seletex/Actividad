@@ -35,7 +35,8 @@ primero.
 
 ## Paso 1. Aplicar el cambio en el servicio que ya existe
 
-El código nuevo ya está en GitHub (commit `e28b62a`).
+El código nuevo ya está en GitHub (últimos commits: `e28b62a` con la mesa de
+ayuda y `9828d95` con esta guía).
 
 1. Entre a [render.com](https://render.com) y abra el servicio actual
    (`https://actividad-0c88.onrender.com`).
@@ -50,7 +51,7 @@ El código nuevo ya está en GitHub (commit `e28b62a`).
    Debe responder algo parecido a:
 
    ```json
-   {"servicio":"ok","base_datos":"ok","registros":1903,"version":"e28b62a"}
+   {"servicio":"ok","base_datos":"ok","registros":1903,"version":"9828d95"}
    ```
 
    Si `version` todavía no aparece, el despliegue no ha terminado: espere y
