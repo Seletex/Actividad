@@ -43,6 +43,10 @@ services:
       # URL publica que se usa en los enlaces de Telegram y correo.
       - key: PUBLIC_URL
         value: https://actividad-0c88.onrender.com
+      # Contrasena que usa el respaldo de 260mb.net para descargar los datos.
+      # Debe ser la misma que esta en php/config.local.php ('respaldo').
+      - key: RESPALDO_TOKEN
+        sync: false
       # Notificaciones. Los valores ya existen en php/config.local.php; se
       # pegan en el panel de Render (Environment) y NO se guardan en Git.
       - key: TELEGRAM_TOKEN
@@ -88,6 +92,11 @@ services:
         value: "true"
       # Sin PUBLIC_URL: la app usa RENDER_EXTERNAL_URL y los enlaces apuntan
       # solos a esta segunda instancia.
+      - key: RESPALDO_TOKEN
+        fromService:
+          type: web
+          name: actividades-app
+          envVarKey: RESPALDO_TOKEN
       - key: TELEGRAM_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID

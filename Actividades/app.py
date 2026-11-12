@@ -61,6 +61,9 @@ from admin_bootstrap import aplicar_password_admin_inicial
 from excel_import_service import reemplazar_registros_desde_excel
 from user_data_service import sincronizar_datos_usuarios
 from backup_service import crear_respaldo_completo
+from respaldo_service import (
+    aplicar_respaldo, construir_respaldo, token_configurado, token_valido
+)
 from export_service import (
     exportar_registros_filtrados, obtener_estadisticas_exportacion,
     generar_informe_template, preparar_dataframe_exportable
@@ -550,6 +553,91 @@ def salud():
         codigo = 503
     respuesta = json.dumps(estado, ensure_ascii=False)
     return respuesta, codigo, {"Content-Type": "application/json; charset=utf-8"}
+
+
+# ---------------------------------------------------------------------------
+# Respaldo entre Neon y la copia en MySQL del hosting 260mb.net.
+# ---------------------------------------------------------------------------
+
+def _respuesta_json(datos, codigo=200):
+    return (
+        json.dumps(datos, ensure_ascii=False),
+        codigo,
+        {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _token_de_respaldo():
+    """El token viaja en una cabecera; tambien se acepta en la URL.
+
+    La URL se usa solo para probar desde el navegador. El script de 260mb.net
+    siempre lo envia en la cabecera X-Respaldo-Token.
+    """
+    return (
+        request.headers.get("X-Respaldo-Token")
+        or request.args.get("token")
+        or ""
+    )
+
+
+@app.route('/respaldo/exportar', methods=['GET'])
+def respaldo_exportar():
+    """Entrega una copia de las tablas para la version PHP de 260mb.net."""
+    if not token_configurado():
+        return _respuesta_json({
+            "error": "El respaldo no esta configurado en Render. "
+                     "Falta la variable RESPALDO_TOKEN."
+        }, 503)
+    if not token_valido(_token_de_respaldo()):
+        return _respuesta_json({"error": "Token de respaldo incorrecto."}, 403)
+    try:
+        datos = construir_respaldo()
+    except Exception:
+        logger.exception("No se pudo generar el respaldo para 260mb.net")
+        return _respuesta_json({
+            "error": "No se pudo leer la base de datos de Render."
+        }, 500)
+    return _respuesta_json(datos, 200)
+
+
+@app.route('/respaldo/importar', methods=['POST'])
+def respaldo_importar():
+    """Recibe los cambios hechos en 260mb.net y los aplica a Neon.
+
+    Solo se usa despues de una caida, cuando se trabajo en la copia. Exige
+    ``confirmar: true`` en el cuerpo para que no se dispare por accidente.
+    """
+    if not token_configurado():
+        return _respuesta_json({
+            "error": "El respaldo no esta configurado en Render. "
+                     "Falta la variable RESPALDO_TOKEN."
+        }, 503)
+    if not token_valido(_token_de_respaldo()):
+        return _respuesta_json({"error": "Token de respaldo incorrecto."}, 403)
+
+    datos = request.get_json(silent=True)
+    if not isinstance(datos, dict):
+        return _respuesta_json({"error": "El cuerpo debe ser un JSON valido."}, 400)
+    if datos.get("confirmar") is not True:
+        return _respuesta_json({
+            "error": "Falta la confirmacion. Envie 'confirmar': true solo "
+                     "despues de una caida real."
+        }, 400)
+
+    try:
+        resumen = aplicar_respaldo(datos)
+    except ValueError as error:
+        return _respuesta_json({"error": str(error)}, 400)
+    except Exception:
+        logger.exception("No se pudo aplicar el respaldo a Neon")
+        return _respuesta_json({
+            "error": "No se pudo aplicar el respaldo. Neon quedo sin cambios."
+        }, 500)
+    return _respuesta_json({"ok": True, "resumen": resumen}, 200)
+
 
 
 @app.route('/listado', methods=['GET'])

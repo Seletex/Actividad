@@ -1,0 +1,14 @@
+# Pagina inicial
+DirectoryIndex index.php
+
+# Codificacion
+AddDefaultCharset UTF-8
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^config\.local\.php$ - [F,L]
+    RewriteRule ^datos/ - [F,L]
+    RewriteRule ^sql/ - [F,L]
+    RewriteRule ^lib/ - [F,L]
+    RewriteRule ^views/ - [F,L]
+</IfModule>

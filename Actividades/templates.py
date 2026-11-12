@@ -17,13 +17,28 @@ LOGIN_TEMPLATE = """
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
-        .login-container {{ width: 100%; max-width: 400px; margin: 20px; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+        .login-container {{ width: 100%; max-width: 420px; margin: 20px; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }}
+        .btn-ticket {{ background: #f0f7ff; color: #1e3c72; border: 2px solid #2a5298; font-weight: 600; }}
+        .btn-ticket:hover {{ background: #2a5298; color: white; }}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="login-container">
-            <h2 class="text-center mb-4">🔐 Iniciar Sesión</h2>
+            <div class="text-center mb-4">
+                <a href="/ticket" class="btn btn-ticket w-100 py-2 d-flex align-items-center justify-content-center gap-2">
+                    <i class="fas fa-headset fa-lg text-primary"></i>
+                    <span>Portal Mesa de Ayuda (Tickets)</span>
+                </a>
+                <small class="text-muted d-block mt-1">Radicar o consultar solicitudes de soporte TI</small>
+            </div>
+            <div class="position-relative my-4">
+                <hr>
+                <span class="position-absolute top-50 start-50 translate-middle bg-white px-3 text-muted small fw-bold">
+                    O INGRESO DE TÉCNICOS
+                </span>
+            </div>
+            <h4 class="text-center mb-3">🔐 Iniciar Sesión</h4>
             {error_login}
             <form action="/login" method="POST">
                 <div class="mb-3">

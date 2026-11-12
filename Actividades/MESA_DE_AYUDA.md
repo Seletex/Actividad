@@ -41,7 +41,10 @@ El código nuevo ya está en GitHub, en la rama `main`.
    (`https://actividad-0c88.onrender.com`).
 2. Pulse **Manual Deploy** → **Deploy latest commit**.
 3. Espere a que termine (unos 2 a 5 minutos).
-4. Abra en el navegador:
+4. En **Environment**, agregue la variable **`RESPALDO_TOKEN`** con el token
+   largo que está en `php/config.local.php`, dentro de `'respaldo'`. Es el mismo
+   valor que usará el respaldo de 260mb.net. Guárdela; Render reinicia solo.
+5. Abra en el navegador:
 
    ```
    https://actividad-0c88.onrender.com/salud
@@ -104,6 +107,7 @@ Agregue exactamente estas variables en **Environment** del servicio
 |----------|-------|
 | `DATABASE_URL` | La **misma** cadena de conexión de Neon que usa el servicio principal. |
 | `FLASK_SECRET_KEY` | La **misma** clave que usa el servicio principal. |
+| `RESPALDO_TOKEN` | El **mismo** token de respaldo del servicio principal. |
 | `PYTHON_VERSION` | `3.11.0` |
 | `SESSION_COOKIE_SECURE` | `true` |
 | `TRUST_PROXY` | `true` |
@@ -185,6 +189,12 @@ Anote la URL del segundo servicio (Render la muestra arriba, se parece a
 - La base de datos no se copia a Render: sigue en Neon.
 - Antes de cualquier cambio grande, exporte el informe desde la app y guarde
   una copia del ZIP de respaldo.
+- **Copia en MySQL de 260mb.net:** es un respaldo adicional y operativo. La
+  guía completa está en `php/LEEME.md`, sección **7. Respaldo automático desde
+  Render (Neon)**. En resumen: el hosting trae los datos una vez al día y, si
+  Render falla, se puede seguir trabajando en 260mb.net con lo último copiado.
+- El respaldo de 260mb.net necesita que `RESPALDO_TOKEN` exista en Render y que
+  el mismo token esté en `php/config.local.php`.
 
 ---
 
